@@ -1,0 +1,261 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  ZIG_VERSION: 0.16.0
+
+jobs:
+  # Our own sources only. libs/flecs is vendored verbatim: reformatting it would make
+  # the next re-vendor an unreadable diff, and fail the vendor integrity check below.
+  fmt:
+    name: formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - run: zig fmt --check src tests bench tools examples build.zig
+
+  # The suite, executed on every supported host. ci/run.sh mirrors these steps locally;
+  # they are spelled out here so each one reports its own status.
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      # The default Debug configuration: flecs's sanitize-level checks, Zig's C
+      # undefined-behaviour sanitizer, and every allocation through the injected
+      # allocator so the balance-to-zero assertion sees individual objects.
+      - name: Test — Debug (sanitize, os_alloc)
+        run: zig build test
+
+      # The release-shaped allocator path with the checks still on. flecs's block
+      # allocator serves small objects from pools, so the bridge sees a different
+      # pattern entirely and the balance assertion means something different.
+      - name: Test — Debug (block allocator)
+        run: zig build test -Duse_os_alloc=false
+
+      - name: Test — ReleaseSafe
+        run: zig build test -Doptimize=ReleaseSafe
+
+      - name: Test — ReleaseFast
+        run: zig build test -Doptimize=ReleaseFast
+
+      - name: Test — ReleaseSmall
+        run: zig build test -Doptimize=ReleaseSmall
+
+      # The configuration a host would ship if it wanted to account for every byte
+      # flecs allocates.
+      - name: Test — ReleaseFast (os_alloc)
+        run: zig build test -Doptimize=ReleaseFast -Duse_os_alloc=true
+
+      # Checks on in an optimized build. Its own step because the build has to undo the
+      # NDEBUG that Zig defines for release C, and flecs warns if that goes wrong.
+      - name: Test — ReleaseFast (sanitize)
+        run: zig build test -Doptimize=ReleaseFast -Ddebug_checks=sanitize
+
+      # Zig's default ABI for Windows is gnu, so every step above exercises that one.
+      # On a Windows runner the MSVC ABI is native, so the suite can run there too
+      # rather than merely compile.
+      - name: Test — Windows MSVC ABI
+        if: runner.os == 'Windows'
+        run: zig build test -Dtarget=x86_64-windows-msvc
+
+  # Build options that change what the C compiles to, or the shape of the structs the
+  # Zig side mirrors. The ABI test is what makes these worth running: a constant that
+  # reached the compiler but not the bindings fails here rather than at a call site.
+  configurations:
+    name: build options
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      # A lean addon set that still supports the whole suite — and the configuration most
+      # likely to be shipped, so it is the one where a test that forgot to gate itself on
+      # an addon shows up. `minimal` alone does not catch that: it turns off systems too,
+      # so the behaviour suite does not run at all.
+      - name: Addons — system, pipeline, meta, log
+        run: >-
+          zig build test -Daddons=minimal -Daddon_system=true
+          -Daddon_pipeline=true -Daddon_meta=true -Daddon_log=true
+
+      # One addon off at a time, from a set that has everything else.
+      - name: Addons — no json
+        run: zig build test -Daddon_json=false
+      - name: Addons — no doc
+        run: zig build test -Daddon_doc=false
+      - name: Addons — no meta
+        run: zig build test -Daddon_meta=false
+
+      # No systems and no pipeline: the behaviour tests cannot run there, the ABI and
+      # allocator tests still do.
+      - name: Addons — minimal
+        run: zig build test -Daddons=minimal
+
+      # Every addon on. The only configuration whose header declares every symbol in the
+      # ABI manifest, and therefore the only one where the guard's coverage assertions
+      # are exact: a name in src/c.zig with no counterpart is a misspelling rather than
+      # a switched-off addon. Without this step that class of error has a hiding place.
+      - name: Addons — everything
+        run: zig build test -Daddons=everything
+
+      # Behavioural: what flecs trades away, and what it stops counting.
+      - name: Memory — low_footprint
+        run: zig build test -Dlow_footprint=true
+      - name: Counters — disabled
+        run: zig build test -Ddisable_counters=true
+
+      # Layout only. These move fields in public structs, and whether the Zig side moved
+      # with them is a compile-time question the ABI guard answers — so they run
+      # `test-unit`, which is the guard and the allocator bridge and nothing else. The
+      # behaviour suite has already run seven times in the job above; running it eleven
+      # more times to re-prove the same thing cost three quarters of this workflow.
+      - name: Sizing — term_count_max=8
+        run: zig build test-unit -Dterm_count_max=8
+      - name: Sizing — term_count_max=16
+        run: zig build test-unit -Dterm_count_max=16
+      - name: Sizing — term_count_max=64
+        run: zig build test-unit -Dterm_count_max=64
+      - name: Sizing — event_desc_max=4
+        run: zig build test-unit -Devent_desc_max=4
+      - name: Sizing — id_desc_max=8
+        run: zig build test-unit -Did_desc_max=8
+      - name: Sizing — sparse_page_bits=8
+        run: zig build test-unit -Dsparse_page_bits=8
+      - name: Sizing — entity_page_bits=8
+        run: zig build test-unit -Dentity_page_bits=8
+      - name: Sizing — term_arg_count_max=8
+        run: zig build test-unit -Dterm_arg_count_max=8
+      - name: Sizing — variable_count_max=8
+        run: zig build test-unit -Dvariable_count_max=8
+      - name: Sizing — query_variable_count_max=64
+        run: zig build test-unit -Dquery_variable_count_max=64
+      - name: Sizing — query_scope_nesting_max=4
+        run: zig build test-unit -Dquery_scope_nesting_max=4
+      - name: Sizing — dag_depth_max=16
+        run: zig build test-unit -Ddag_depth_max=16
+      - name: Sizing — hi_component_id=64
+        run: zig build test-unit -Dhi_component_id=64
+      - name: Sizing — hi_id_record_id=64
+        run: zig build test-unit -Dhi_id_record_id=64
+      - name: Scalars — ftime_t=fp64
+        run: zig build test-unit -Dftime_t=fp64
+      - name: Scalars — float_t=fp64
+        run: zig build test-unit -Dfloat_t=fp64
+      - name: Scalars — both fp64
+        run: zig build test-unit -Dftime_t=fp64 -Dfloat_t=fp64
+      - name: Checks — none
+        run: zig build test-unit -Ddebug_checks=none
+      - name: Checks — debug
+        run: zig build test-unit -Ddebug_checks=debug
+
+      - name: Shared library
+        run: zig build -Dshared=true
+
+  # A separate project that depends on this one by path, with its own build graph.
+  # Nothing inside the package can prove the package is usable from outside it — that
+  # the module resolves, that the C library links, that the installed header is where
+  # the build says it is. This job is the only thing that does.
+  example:
+    name: example consumer
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - run: zig build run
+        working-directory: examples/basic
+      - run: zig build run -Doptimize=ReleaseFast
+        working-directory: examples/basic
+
+  # Compile-only coverage of the targets the suite cannot execute on. These prove the
+  # sources and build graph are portable; the test job above is what proves behaviour.
+  cross-compile:
+    name: cross (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-linux-gnu
+          - aarch64-linux-gnu
+          - x86_64-linux-musl
+          - aarch64-linux-musl
+          - x86_64-windows-gnu
+          - aarch64-windows-gnu
+          - x86_64-macos
+          - aarch64-macos
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - run: zig build -Dtarget=${{ matrix.target }}
+
+  # Proves libs/ is still a pristine copy of the pinned upstream commit, rather than a
+  # claim in a markdown file. Needs network, so it is its own job and is not part of
+  # the local inner loop.
+  vendor-integrity:
+    name: vendor integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ci/verify-vendor.sh
+
+  # A guard that passes is indistinguishable from a guard that checks nothing. This job
+  # introduces one deliberate defect at a time into src/c.zig — a field swap, a widened
+  # parameter, a deleted declaration — and asserts the build fails each time. It is the
+  # only job here that measures the tests rather than the code.
+  abi-mutations:
+    name: abi guard mutations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - run: ci/mutate.sh
+
+  # src/abi_manifest.zig is the list of every symbol flecs exports, generated from the
+  # vendored header. If it is stale, the ABI guard is measuring coverage against what
+  # flecs used to export — which is exactly when a re-vendor could add API nobody binds.
+  abi-manifest:
+    name: abi manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - run: zig build abi-manifest-check
+      - run: zig build docs

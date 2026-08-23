@@ -1,0 +1,10 @@
+.{
+    .name = .zecs_example_basic,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.16.0",
+    .fingerprint = 0xccb9a6b3eb59aea2,
+    .dependencies = .{
+        .zecs = .{ .path = "../.." },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "src" },
+}
