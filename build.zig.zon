@@ -1,0 +1,21 @@
+.{
+    .name = .zecs,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .fingerprint = 0xec068ecdd3bee17e,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "bench",
+        "ci",
+        ".github",
+        "libs",
+        "src",
+        "tests",
+        "tools",
+        "LICENSE",
+        "README.md",
+        "CHANGELOG.md",
+        "UPSTREAM.md",
+    },
+}
