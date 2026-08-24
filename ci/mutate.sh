@@ -74,13 +74,27 @@ PY
     return
   fi
 
-  if "${BUILD[@]}" >/dev/null 2>&1; then
+  local output
+  output=$("${BUILD[@]}" 2>&1)
+  local status=$?
+
+  if [ "$status" -eq 0 ]; then
     printf '%sSURVIVED%s\n' "$RED" "$OFF"
     SURVIVED=$((SURVIVED + 1))
     SURVIVORS+=("$name")
-  else
+  elif printf '%s' "$output" | grep -q 'zecs ABI drift'; then
+    # The build failed *and* the guard's own compile error is in the output — the
+    # signal every one of these mutations exists to prove, rather than a build that
+    # happened to fail for some other reason (a mutated declaration the wrapper also
+    # references directly, say, which fails compilation on its own regardless of
+    # whether the guard caught anything).
     printf '%scaught%s\n' "$GREEN" "$OFF"
     KILLED=$((KILLED + 1))
+  else
+    printf '%sWRONG FAILURE%s %s(build failed, but not from the ABI guard)%s\n' \
+      "$RED" "$OFF" "$DIM" "$OFF"
+    SURVIVED=$((SURVIVED + 1))
+    SURVIVORS+=("$name (wrong failure)")
   fi
   restore
 }
