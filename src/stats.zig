@@ -4,8 +4,8 @@
 //! kilobytes of `ecs_metric_t` — sixty-odd named fields, each a sliding window of sixty
 //! samples — and mirroring those names into Zig would add sixty declarations that carry
 //! no type information the C struct did not already have, and one more place for a name
-//! to drift. So the struct is `zecs.c.ecs_world_stats_t`, filled by
-//! `zecs.c.ecs_world_stats_get`, and what this module adds is the part that is actually
+//! to drift. So the struct is `zecs.c.stats.ecs_world_stats_t`, filled by
+//! `zecs.c.stats.ecs_world_stats_get`, and what this module adds is the part that is actually
 //! easy to get wrong: reading one metric out of it.
 //!
 //! For the same reason the `reduce`, `reduce_last`, `repeat_last` and `copy_last`
@@ -18,7 +18,9 @@
 //! pointer and an `i32` count into a slice.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c_alerts = @import("c/alerts.zig");
+const c_metrics = @import("c/metrics.zig");
+const c = @import("c/stats.zig");
 const options = @import("zecs_options");
 const types = @import("types.zig");
 const world_mod = @import("world.zig");
@@ -67,8 +69,8 @@ pub const Counter = struct {
 /// The cursor into a stats struct's sliding window.
 ///
 /// ```zig
-/// var stats: zecs.c.ecs_world_stats_t = .{};
-/// zecs.c.ecs_world_stats_get(world.raw, &stats);
+/// var stats: zecs.c.stats.ecs_world_stats_t = .{};
+/// zecs.c.stats.ecs_world_stats_get(world.raw, &stats);
 ///
 /// const w = zecs.stats.Window.of(&stats);
 /// const entities = w.gauge(&stats.entities.count).avg;
@@ -129,7 +131,7 @@ pub const Window = struct {
 /// var stats: zecs.stats.PipelineStats = .{};
 /// defer stats.deinit();
 ///
-/// if (stats.sample(world, zecs.c.ecs_get_pipeline(world.raw))) {
+/// if (stats.sample(world, zecs.c.core.ecs_get_pipeline(world.raw))) {
 ///     for (stats.systems()) |system| { ... }
 /// }
 /// ```
@@ -205,10 +207,10 @@ pub const MetricKind = enum {
     /// imported — see `zecs.pipeline.importBuiltin`.
     pub inline fn id(self: MetricKind) Entity {
         return switch (self) {
-            .gauge => c.EcsGauge,
-            .counter => c.EcsCounter,
-            .counter_increment => c.EcsCounterIncrement,
-            .counter_id => c.EcsCounterId,
+            .gauge => c_metrics.EcsGauge,
+            .counter => c_metrics.EcsCounter,
+            .counter_increment => c_metrics.EcsCounterIncrement,
+            .counter_id => c_metrics.EcsCounterId,
         };
     }
 };
@@ -299,10 +301,10 @@ pub const Severity = enum {
     /// been imported — see `zecs.pipeline.importBuiltin`.
     pub inline fn id(self: Severity) Entity {
         return switch (self) {
-            .info => c.EcsAlertInfo,
-            .warning => c.EcsAlertWarning,
-            .err => c.EcsAlertError,
-            .critical => c.EcsAlertCritical,
+            .info => c_alerts.EcsAlertInfo,
+            .warning => c_alerts.EcsAlertWarning,
+            .err => c_alerts.EcsAlertError,
+            .critical => c_alerts.EcsAlertCritical,
         };
     }
 };
@@ -407,7 +409,7 @@ pub const AlertDesc = struct {
 /// Import the alerts module first. Alerts are evaluated by two systems flecs installs
 /// on `PreStore` and `OnStore` with an interval of half a second, so an alert only
 /// appears once the world has been progressed far enough for that interval to elapse,
-/// and it clears the same way. Read the result with `zecs.c.ecs_get_alert_count`.
+/// and it clears the same way. Read the result with `zecs.c.alerts.ecs_get_alert_count`.
 ///
 /// Needs the alerts addon.
 pub fn alert(world: World, desc: AlertDesc) Error!Entity {

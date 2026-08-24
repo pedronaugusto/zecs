@@ -6,7 +6,7 @@
 //! they replace, and mistyping one is a compile error instead of a silently wrong query.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/core.zig");
 const Error = @import("error.zig").Error;
 
 /// An entity. Also an id: in flecs every entity can be used as a component or a tag,
@@ -329,7 +329,7 @@ pub const QueryDesc = struct {
 
     /// Fills in a C descriptor. Public because it is the escape hatch: build one of
     /// these, then set the fields this wrapper does not cover before passing it to
-    /// `zecs.c.ecs_query_init`.
+    /// `zecs.c.core.ecs_query_init`.
     pub fn toC(self: QueryDesc) Error!c.ecs_query_desc_t {
         if (self.terms.len > term_count_max) return Error.TooManyTerms;
 

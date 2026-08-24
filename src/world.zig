@@ -11,7 +11,7 @@
 //! that comes back is already typed. None of it survives to runtime as a wrapper.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/entity.zig");
 const types = @import("types.zig");
 const memory = @import("memory.zig");
 const component_mod = @import("component.zig");
@@ -261,7 +261,7 @@ pub const World = struct {
     /// A stage is a private command queue wearing a world pointer, which is what makes
     /// it usable from one worker thread while the world is readonly: every operation
     /// here works on it unchanged, and that is flecs's design rather than an accident.
-    /// Set the number of stages first with `zecs.c.ecs_set_stage_count`, or let
+    /// Set the number of stages first with `zecs.c.world.ecs_set_stage_count`, or let
     /// `setThreads` do it.
     ///
     /// `deinit` is the one operation that does not belong on the result — it would end

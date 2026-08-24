@@ -1,7 +1,7 @@
 //! Queries: the standing questions a world can be asked.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/query.zig");
 const types = @import("types.zig");
 const iter_mod = @import("iter.zig");
 const Error = @import("error.zig").Error;

@@ -35,7 +35,7 @@
 //! `*c.ecs_strbuf_t` and why `Builder` says not to move it.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/core.zig");
 const types = @import("types.zig");
 
 //=============================================================================
@@ -45,8 +45,8 @@ const types = @import("types.zig");
 /// Frees a string flecs returned.
 ///
 /// flecs spells this `ecs_os_free`, which is a macro over a function pointer rather
-/// than a symbol — so a caller holding the `?[*:0]u8` from `zecs.c.ecs_ptr_to_json` or
-/// `zecs.c.ecs_id_str` has no exported function to call and no obvious way to find one.
+/// than a symbol — so a caller holding the `?[*:0]u8` from `zecs.c.core.ecs_ptr_to_json` or
+/// `zecs.c.core.ecs_id_str` has no exported function to call and no obvious way to find one.
 /// This is that function; see `types.freeOsBlock` for the one place it is implemented.
 ///
 /// The block goes back to whatever `zecs.setAllocator` installed, so a string that is

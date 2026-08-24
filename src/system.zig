@@ -1,6 +1,6 @@
 //! Systems: queries with a callback, run by the pipeline.
 
-const c = @import("c.zig");
+const c = @import("c/core.zig");
 const types = @import("types.zig");
 const Error = @import("error.zig").Error;
 

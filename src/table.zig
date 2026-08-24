@@ -55,7 +55,7 @@
 //! the one that claims an entity's table against other threads.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/table.zig");
 const types = @import("types.zig");
 const iter_mod = @import("iter.zig");
 const world_mod = @import("world.zig");
@@ -75,7 +75,7 @@ const Iter = iter_mod.Iter;
 /// destroys it as entities move, and there is nothing here to release.
 ///
 /// Anything not covered here is reachable raw: the fields are public, so
-/// `zecs.c.ecs_table_get_target(table.world, table.raw, rel, 0)` is a first-class way
+/// `zecs.c.table.ecs_table_get_target(table.world, table.raw, rel, 0)` is a first-class way
 /// to call the rest of the API.
 pub const Table = struct {
     raw: *c.ecs_table_t,
@@ -412,7 +412,7 @@ pub fn readBegin(world: World, e: Entity) Error!Read {
 /// `ecs_ref_t` is a different size there; here the component is part of the ref, so it
 /// cannot be got wrong in any build.
 ///
-/// `zecs.c.ecs_ref_update(world.raw, &r.raw, r.component)` refreshes a ref without
+/// `zecs.c.entity.ecs_ref_update(world.raw, &r.raw, r.component)` refreshes a ref without
 /// reading through it, for revalidating a batch in one pass. It has no wrapper because
 /// a useful one would have to hand back the pointer, at which point it is `get`.
 pub fn Ref(comptime T: type) type {

@@ -45,7 +45,7 @@
 //! `entity_defaults` and `iter_defaults` are provided for the other.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/json.zig");
 const options = @import("zecs_options");
 const strbuf = @import("strbuf.zig");
 const types = @import("types.zig");

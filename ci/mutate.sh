@@ -22,15 +22,19 @@ else
   RED=; GREEN=; DIM=; BOLD=; OFF=
 fi
 
-C=src/c.zig
+C=src/c
 TODO_FILE=src/abi_todo.zig
 BACKUP_C=$(mktemp)
 BACKUP_TODO_FILE=$(mktemp)
-cp "$C" "$BACKUP_C"
+# $C is a directory of declaration modules, so the backup is a directory too.
+BACKUP_C=$(mktemp -d)
+cp -R "$C"/. "$BACKUP_C"/
 cp "$TODO_FILE" "$BACKUP_TODO_FILE"
+BACKUP_REG=$(mktemp)
+cp src/c.zig "$BACKUP_REG"
 
-restore() { cp "$BACKUP_C" "$C"; cp "$BACKUP_TODO_FILE" "$TODO_FILE"; }
-cleanup() { restore; rm -f "$BACKUP_C" "$BACKUP_TODO_FILE"; }
+restore() { cp -R "$BACKUP_C"/. "$C"/; cp "$BACKUP_TODO_FILE" "$TODO_FILE"; cp "$BACKUP_REG" src/c.zig; }
+cleanup() { restore; rm -rf "$BACKUP_C"; rm -f "$BACKUP_TODO_FILE" "$BACKUP_REG"; }
 trap cleanup EXIT INT TERM
 
 SURVIVED=0
@@ -51,11 +55,22 @@ BUILD=(zig build test-compile -Daddons=everything)
 # The rewrite is a python snippet with `s` bound to the file's text; it must reassign `s`
 # and it must actually change it — a mutation that fails to apply would otherwise be
 # scored as a pass.
+# `file` may be one path or a directory of declaration modules. The declarations
+# used to live in a single file and now live in `src/c/`, so a mutation names
+# the text it changes rather than the file it changes it in, and this finds the
+# file that text is in. A snippet matching nothing is a stale mutation and is
+# reported as one.
 mutate() {
   local name="$1" file="$2" script="$3"
   printf '  %-56s' "$name"
 
-  if ! python3 - "$file" <<PY
+  local candidates=("$file")
+  if [ -d "$file" ]; then candidates=("$file"/*.zig); fi
+
+  local applied=""
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if python3 - "$candidate" <<PY
 import sys
 p = sys.argv[1]
 s = open(p).read()
@@ -65,7 +80,10 @@ if s == before:
     sys.exit(3)
 open(p, 'w').write(s)
 PY
-  then
+    then applied="$candidate"; break; fi
+  done
+
+  if [ -z "$applied" ]; then
     printf '%sNOT APPLIED%s %s(the mutation itself is stale — fix this script)%s\n' \
       "$RED" "$OFF" "$DIM" "$OFF"
     SURVIVED=$((SURVIVED + 1))
@@ -177,9 +195,14 @@ s = s.replace("pub extern const EcsWildcard: ecs_entity_t;\n", "", 1)
 # `ECS_IS_PAIR`, and they are different predicates. Satisfying the coverage sweep with a
 # Zig rewrite under the function name would leave the real symbol unbound behind a
 # declaration that looks bound.
+# The body is deliberately trivial. A lookalike that calls something has to be
+# able to SEE it, and after the split the macro this one used to call lives in a
+# different module — so the build failed on the missing name instead of on the
+# guard, and this script said so rather than counting it. What is being tested
+# is that a Zig function wearing an extern's name is refused, not what it does.
 mutate 'coverage: an extern is replaced by a Zig lookalike' "$C" '
 s = s.replace("pub extern fn ecs_id_is_pair(id: ecs_id_t) bool;",
-              "pub inline fn ecs_id_is_pair(id: ecs_id_t) bool { return ECS_IS_PAIR(id); }")
+              "pub inline fn ecs_id_is_pair(id: ecs_id_t) bool { _ = id; return false; }")
 '
 
 # The to-do list is empty now that every export is bound, which is what these three
@@ -222,3 +245,11 @@ for name in "${SURVIVORS[@]}"; do
   printf '  %s- %s%s\n' "$RED" "$name" "$OFF"
 done
 exit 1
+
+# A module silently dropped from src/c.zig's list. Both guards discover what to
+# check by walking that list, so a module missing from it is a module neither
+# covers. That is the failure mode splitting the declarations introduced, and
+# nothing else in this script would notice it.
+mutate 'registry: a module is dropped from the module list' src/c.zig '
+s = s.replace("    script,\n", "")
+'

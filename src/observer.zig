@@ -1,6 +1,6 @@
 //! Observers: callbacks that fire when something happens to matching entities.
 
-const c = @import("c.zig");
+const c = @import("c/core.zig");
 const types = @import("types.zig");
 const Error = @import("error.zig").Error;
 

@@ -50,13 +50,21 @@ const std = @import("std");
 // The raw layer
 //=============================================================================
 
-/// flecs's C API, declared verbatim: `zecs.c.ecs_world_t`, `zecs.c.ecs_entity_init`,
-/// `zecs.c.EcsOnUpdate`. Everything the typed layer is built from, available directly
+/// flecs's C API, declared verbatim: `zecs.c.core.ecs_world_t`, `zecs.c.core.ecs_entity_init`,
+/// `zecs.c.core.EcsOnUpdate`. Everything the typed layer is built from, available directly
 /// for the parts it does not cover.
 ///
 /// For anything not declared even there, link the artifact this package builds and
 /// `@cImport` `flecs.h`: the header is installed for exactly that purpose.
+/// The raw flecs declarations, one namespace per area — `c.entity`, `c.query`,
+/// `c.meta` and so on. This is the escape hatch: anything the typed surface
+/// does not wrap is reachable here, ABI-checked, and documented as a
+/// first-class way to call it. It used to be one flat namespace; the area is
+/// now part of the path, so `core.ecs_new` is `c.entity.ecs_new`.
 pub const c = @import("c.zig");
+
+/// Shorthand for the area this file itself happens to need.
+const core = c.core;
 
 /// The build options this package was compiled with — the addon set that was requested,
 /// the allocator mode, the sizing constants. Branch on these instead of assuming.
