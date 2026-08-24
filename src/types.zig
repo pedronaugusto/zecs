@@ -201,23 +201,34 @@ pub const Builtin = enum {
 // Strings flecs hands back
 //=============================================================================
 
-/// A string flecs allocated and the caller has to free.
+/// Returns a block flecs allocated to the allocator it came from, via the OS API's own
+/// free callback.
 ///
 /// flecs frees these with `ecs_os_free`, which is not a symbol: it is a macro over the
 /// free pointer in the process-wide OS API, so a block has to go back through the same
-/// table entry it came out of. Handing back a bare slice would leave the caller to
-/// discover that, and `std.mem.Allocator.free` on one of these is a corrupted heap
-/// rather than an error, so the answer is carried with the string instead.
+/// table entry it came out of. `Str.deinit`, `strbuf.free` and `value.freeString` are the
+/// three owning types that hand a caller one of these strings, and all three release it
+/// through this one function rather than each repeating the same unwrap.
+///
+/// Null only in a process where flecs has never had an OS API, which is a process that
+/// cannot have produced the block being freed.
+pub fn freeOsBlock(ptr: ?*anyopaque) void {
+    const free = c.ecs_os_api.free_ orelse return;
+    free(ptr);
+}
+
+/// A string flecs allocated and the caller has to free.
+///
+/// Handing back a bare slice would leave the caller to discover that `ecs_os_free` is a
+/// macro rather than a symbol, and `std.mem.Allocator.free` on one of these is a
+/// corrupted heap rather than an error, so the answer is carried with the string instead.
 pub const Str = struct {
     /// The text, without its terminator. Valid until `deinit`.
     value: [:0]const u8,
 
     /// Returns the block to the allocator flecs made it from.
     pub fn deinit(self: Str) void {
-        // Null only in a process where flecs has never had an OS API, which is a
-        // process that cannot have produced this string.
-        const free = c.ecs_os_api.free_ orelse return;
-        free(@ptrCast(@constCast(self.value.ptr)));
+        freeOsBlock(@ptrCast(@constCast(self.value.ptr)));
     }
 
     /// Takes ownership of a `char*` flecs returned. Null stays null: flecs renders an

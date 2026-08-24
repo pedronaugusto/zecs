@@ -85,9 +85,19 @@ pub const Iter = struct {
     // in safe builds.
     //=========================================================================
 
+    /// Bounds flecs itself checks with `ecs_check`, which a release build compiles out —
+    /// see the module comment on `Table.column` for the same pattern. Every accessor
+    /// below takes a field index, so every one of them checks it here first: with safety
+    /// off, an out-of-range index would otherwise read past `it->columns`, `it->ids` or
+    /// `it->sources` instead of hitting an assertion.
+    inline fn checkFieldIndex(self: Iter, index: i8) void {
+        std.debug.assert(index >= 0 and index < self.raw.field_count);
+    }
+
     /// The field at `index`, sized correctly whether it is per-entity or shared.
     /// Null when the term is optional and did not match.
     pub inline fn field(self: Iter, comptime T: type, index: i8) ?[]T {
+        self.checkFieldIndex(index);
         const ptr = c.ecs_field_w_size(self.raw, @sizeOf(T), index) orelse return null;
         const typed: [*]T = @ptrCast(@alignCast(ptr));
         const len = if (c.ecs_field_is_self(self.raw, index)) self.count() else 1;
@@ -97,6 +107,7 @@ pub const Iter = struct {
     /// The field at `index`, which must be per-entity. One C call cheaper than `field`,
     /// and the assertion that it really is per-entity is compiled out in ReleaseFast.
     pub inline fn fieldSelf(self: Iter, comptime T: type, index: i8) []T {
+        self.checkFieldIndex(index);
         const ptr = c.ecs_field_w_size(self.raw, @sizeOf(T), index).?;
         std.debug.assert(c.ecs_field_is_self(self.raw, index));
         const typed: [*]T = @ptrCast(@alignCast(ptr));
@@ -106,6 +117,7 @@ pub const Iter = struct {
     /// The single value behind a field matched from somewhere else — a parent, a
     /// prefab, a fixed source. Null when the term did not match.
     pub inline fn fieldShared(self: Iter, comptime T: type, index: i8) ?*T {
+        self.checkFieldIndex(index);
         const ptr = c.ecs_field_w_size(self.raw, @sizeOf(T), index) orelse return null;
         std.debug.assert(!c.ecs_field_is_self(self.raw, index));
         return @ptrCast(@alignCast(ptr));
@@ -113,21 +125,25 @@ pub const Iter = struct {
 
     /// Whether an optional or conditionally-set field has a value.
     pub inline fn isSet(self: Iter, index: i8) bool {
+        self.checkFieldIndex(index);
         return c.ecs_field_is_set(self.raw, index);
     }
 
     /// Whether the field came from the matched entity rather than through traversal.
     pub inline fn isSelf(self: Iter, index: i8) bool {
+        self.checkFieldIndex(index);
         return c.ecs_field_is_self(self.raw, index);
     }
 
     /// The id the term matched — useful when the term held a wildcard.
     pub inline fn fieldId(self: Iter, index: i8) Id {
+        self.checkFieldIndex(index);
         return c.ecs_field_id(self.raw, index);
     }
 
     /// The entity a field was matched on, or 0 when it is the iterated entity.
     pub inline fn fieldSrc(self: Iter, index: i8) Entity {
+        self.checkFieldIndex(index);
         return c.ecs_field_src(self.raw, index);
     }
 
