@@ -25,6 +25,7 @@
 
 const std = @import("std");
 const c = @import("c.zig");
+const types = @import("types.zig");
 const world_mod = @import("world.zig");
 const Error = @import("error.zig").Error;
 
@@ -102,12 +103,12 @@ pub const Value = struct {
 /// `Table.str`, `Script.astToString`, `Vars.interpolate` and the rest of flecs's `_str`
 /// calls all return heap memory the caller owns. flecs spells this `ecs_os_free`, which
 /// is a macro over the OS API's free callback rather than a function, so there is no
-/// symbol for the raw layer to declare and this is where it lives instead.
+/// symbol for the raw layer to declare and this is where it lives instead — see
+/// `types.freeOsBlock` for the one place the release itself happens.
 ///
 /// The callback is whatever was in force when the string was allocated. That is the
 /// process-wide OS API, so an allocator installed with `zecs.setAllocator` before the
 /// first world is the one that sees it.
 pub fn freeString(text: [:0]u8) void {
-    const release = c.ecs_os_api.free_ orelse return;
-    release(text.ptr);
+    types.freeOsBlock(text.ptr);
 }
