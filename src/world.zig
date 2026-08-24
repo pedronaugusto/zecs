@@ -816,16 +816,6 @@ pub const World = struct {
         return .{ .world = self.raw };
     }
 
-    //=========================================================================
-    // Diagnostics
-    //=========================================================================
-
-    /// Sets flecs's logging level. Level 0 prints, among other things, the list of
-    /// addons the library was actually compiled with — which is the authoritative
-    /// answer to that question, since addons enable their own dependencies.
-    pub fn setLogLevel(level: i32) i32 {
-        return c.ecs_log_set_level(level);
-    }
 };
 
 //=============================================================================
