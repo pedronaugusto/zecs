@@ -3385,6 +3385,10 @@ pub extern fn ecs_parser_warningv_(name: ?[*:0]const u8, expr: ?[*:0]const u8, c
 
 /// Set the log level and return the previous one. -1 silences warnings as well as
 /// traces, -2 silences errors too.
+///
+/// Level 0 prints, among other things, the list of addons the library was actually
+/// compiled with — which is the authoritative answer to that question, since addons
+/// enable their own dependencies.
 pub extern fn ecs_log_set_level(level: c_int) c_int;
 
 /// Turn ANSI colors in log output on or off, returning the previous setting. They are
