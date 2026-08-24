@@ -46,7 +46,7 @@
 //! exercises it with a threaded pipeline.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/os.zig");
 const options = @import("zecs_options");
 const Error = @import("error.zig").Error;
 

@@ -22,7 +22,7 @@
 //! first.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/doc.zig");
 const options = @import("zecs_options");
 const types = @import("types.zig");
 const world_mod = @import("world.zig");

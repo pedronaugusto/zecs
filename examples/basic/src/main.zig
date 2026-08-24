@@ -62,6 +62,6 @@ pub fn main() !void {
 
     // The raw layer is a consumer-facing API too, not an internal detail: every symbol
     // flecs exports is declared, under its own name.
-    const info = zecs.c.ecs_get_build_info();
+    const info = zecs.c.world.ecs_get_build_info();
     std.debug.print("flecs {s}\n", .{info.version.?});
 }

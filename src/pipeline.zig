@@ -14,7 +14,7 @@
 //!   `ecs_ftime_t`, which follows `-Dftime_t`, and the zero they can return comes from
 //!   an `ecs_check` that aborts in a checked build and is compiled out of a release
 //!   one. There is no reachable failure to turn into an error and no untyped parameter
-//!   to remove. `zecs.c.ecs_set_interval(world.raw, 0, 0.5)` is the binding.
+//!   to remove. `zecs.c.timer.ecs_set_interval(world.raw, 0, 0.5)` is the binding.
 //! - `ecs_import_from_library` loads a module out of a shared object, which is
 //!   `std.DynLib` territory, and `ecs_import_c`/`ecs_module_init` are the C spellings
 //!   of what `import` below does with a comptime type.
@@ -26,7 +26,7 @@
 //! the caller reports rather than the time that passed.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/pipeline.zig");
 const options = @import("zecs_options");
 const types = @import("types.zig");
 const world_mod = @import("world.zig");
@@ -55,7 +55,7 @@ const World = world_mod.World;
 /// with `order_by` set to compare entity ids, which is what breaks ties between two
 /// systems in the same phase. `QueryDesc` has no `order_by` yet, so a pipeline built
 /// from here orders phases but leaves systems within a phase in table order. Set the
-/// field on the descriptor `toC` returns and call `zecs.c.ecs_pipeline_init` directly
+/// field on the descriptor `toC` returns and call `zecs.c.pipeline.ecs_pipeline_init` directly
 /// when that matters.
 pub const PipelineDesc = struct {
     /// A name, so the pipeline is legible in an inspector. Taken literally, dots and
@@ -63,7 +63,7 @@ pub const PipelineDesc = struct {
     name: ?[:0]const u8 = null,
 
     /// Reuse an existing entity rather than making one. The entity must not already
-    /// carry a pipeline; use `zecs.c.ecs_pipeline_update` to replace one that does.
+    /// carry a pipeline; use `zecs.c.pipeline.ecs_pipeline_update` to replace one that does.
     entity: Entity = 0,
 
     /// What the pipeline runs, and in what order.
@@ -81,7 +81,7 @@ pub const PipelineDesc = struct {
 /// Creates a pipeline and returns the entity that carries it.
 ///
 /// Needs the pipeline addon. Setting it as the world's pipeline is
-/// `zecs.c.ecs_set_pipeline`, which needs no wrapper.
+/// `zecs.c.pipeline.ecs_set_pipeline`, which needs no wrapper.
 pub fn create(world: World, desc: PipelineDesc) Error!Entity {
     if (comptime !options.addon_pipeline) @compileError(
         "zecs.pipeline.create needs the pipeline addon: build with -Daddon_pipeline=true",

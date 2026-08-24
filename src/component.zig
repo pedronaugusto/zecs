@@ -11,7 +11,7 @@
 //! one process work.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/core.zig");
 const types = @import("types.zig");
 
 const Entity = types.Entity;

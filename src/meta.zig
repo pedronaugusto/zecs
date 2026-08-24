@@ -73,7 +73,7 @@
 //!   would read the payload of an empty optional.
 //! - **Unions.** flecs has no tagged-union kind. A union can be described by hand as an
 //!   `EcsOpaque` with serialize and ensure_member callbacks, which is what
-//!   `zecs.c.ecs_opaque_init` is for, but which member is live is a fact only the
+//!   `zecs.c.core.ecs_opaque_init` is for, but which member is live is a fact only the
 //!   containing tag knows and nothing in `@typeInfo` connects the two.
 //! - **`@Vector`.** Its `@sizeOf` is rounded up to the hardware's vector width, so the
 //!   element count flecs would be told and the bytes the value occupies disagree. `[N]T`
@@ -141,7 +141,7 @@
 const std = @import("std");
 const options = @import("zecs_options");
 
-const c = @import("c.zig");
+const c = @import("c/core.zig");
 const types = @import("types.zig");
 const component_mod = @import("component.zig");
 const world_mod = @import("world.zig");
@@ -181,7 +181,7 @@ pub fn register(world: World, comp: anytype) Error!Entity {
 /// this world does not have it yet.
 ///
 /// This is what a component's fields resolve through, and it is the id to hand to
-/// `zecs.c.ecs_ptr_to_json` and friends for a type that is not a component.
+/// `zecs.c.core.ecs_ptr_to_json` and friends for a type that is not a component.
 pub fn typeId(world: World, comptime T: type) Error!Entity {
     return typeEntity(world.raw, T);
 }
@@ -510,14 +510,14 @@ fn refuse(comptime T: type) noreturn {
             "slice's length is in the slice, where a schema cannot reach it, and a " ++
             "single pointer tells a serialiser nothing about who owns the target. " ++
             "`[*:0]const u8` is the exception, because that is flecs's own string type. " ++
-            "For anything else, describe it by hand with zecs.c.ecs_opaque_init.",
+            "For anything else, describe it by hand with zecs.c.core.ecs_opaque_init.",
         .optional => "flecs's reflection has no nullable kind, so this would have to " ++
             "be described as its payload and would be read even when it is empty. " ++
             "`?[*:0]const u8` is the exception, because a null pointer is how flecs " ++
             "spells an absent string.",
         .@"union" => "flecs's reflection has no tagged-union kind, and nothing in " ++
             "@typeInfo connects a bare union to the tag that says which member is " ++
-            "live. Describe it by hand with zecs.c.ecs_opaque_init, or split it into " ++
+            "live. Describe it by hand with zecs.c.core.ecs_opaque_init, or split it into " ++
             "a tag component and a struct.",
         .vector => "@sizeOf rounds a vector up to the hardware's width, so the bytes " ++
             "it occupies and the elements a schema would claim disagree. Use [N]T, " ++

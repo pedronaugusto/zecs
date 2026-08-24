@@ -789,7 +789,7 @@ const Body = struct {
 /// Frees a string flecs allocated. flecs hands ownership of every `char*` it returns to
 /// the caller, and the allocator that made it is the one installed on the OS API.
 fn freeFlecsString(text: [*:0]u8) void {
-    zecs.c.ecs_os_api.free_.?(@ptrCast(text));
+    zecs.c.core.ecs_os_api.free_.?(@ptrCast(text));
 }
 
 test "a derived schema serialises a nested Zig struct to JSON" {
@@ -813,7 +813,7 @@ test "a derived schema serialises a nested Zig struct to JSON" {
             .owner = captain,
         });
 
-        const text = zecs.c.ecs_ptr_to_json(world.raw, schema, world.get(e, body).?) orelse
+        const text = zecs.c.core.ecs_ptr_to_json(world.raw, schema, world.get(e, body).?) orelse
             return error.SerializeFailed;
         defer freeFlecsString(text);
 
@@ -863,7 +863,7 @@ test "a derived schema parses JSON back into a Zig struct" {
         _ = try world.entity(.{ .name = "quartermaster" });
 
         var parsed: Body = std.mem.zeroes(Body);
-        const rest = zecs.c.ecs_ptr_from_json(world.raw, schema, &parsed,
+        const rest = zecs.c.json.ecs_ptr_from_json(world.raw, schema, &parsed,
             \\{"origin": {"x": 10.5, "y": -4}, "facing": "west", "hits": [7, 11, 13],
             \\ "alive": true, "flags": "frozen", "owner": "quartermaster"}
         , &.{});
@@ -892,18 +892,18 @@ test "the derived members carry the offsets and types the Zig type has" {
         // Offsets come from @offsetOf rather than from flecs recomputing a layout, so
         // they hold even where Zig has moved a field to close a padding hole.
         inline for (.{ "origin", "facing", "hits", "alive", "flags", "owner" }) |name| {
-            const member = zecs.c.ecs_struct_get_member(world.raw, schema, name).?;
+            const member = zecs.c.meta.ecs_struct_get_member(world.raw, schema, name).?;
             try std.testing.expectEqual(@as(i32, @offsetOf(Body, name)), member.offset);
         }
 
         // The annotated member is flecs's entity type, not the u64 it is made of.
-        const owner = zecs.c.ecs_struct_get_member(world.raw, schema, "owner").?;
-        try std.testing.expectEqual(zecs.c.FLECS_IDecs_entity_tID_, owner.type);
+        const owner = zecs.c.meta.ecs_struct_get_member(world.raw, schema, "owner").?;
+        try std.testing.expectEqual(zecs.c.core.FLECS_IDecs_entity_tID_, owner.type);
 
         // An array field is an inline array of its element type.
-        const hits = zecs.c.ecs_struct_get_member(world.raw, schema, "hits").?;
+        const hits = zecs.c.meta.ecs_struct_get_member(world.raw, schema, "hits").?;
         try std.testing.expectEqual(@as(i32, 3), hits.count);
-        try std.testing.expectEqual(zecs.c.FLECS_IDecs_i32_tID_, hits.type);
+        try std.testing.expectEqual(zecs.c.core.FLECS_IDecs_i32_tID_, hits.type);
     }
 }
 
@@ -924,8 +924,8 @@ test "a nested type used by two components is registered once" {
         // Both members point at the one entity Vec2 registered under, which is also
         // what asking for it directly returns.
         const vec2 = try zecs.meta.typeId(world, Vec2);
-        const from = zecs.c.ecs_struct_get_member(world.raw, origin.asId(), "at").?;
-        const to = zecs.c.ecs_struct_get_member(world.raw, destination.asId(), "at").?;
+        const from = zecs.c.meta.ecs_struct_get_member(world.raw, origin.asId(), "at").?;
+        const to = zecs.c.meta.ecs_struct_get_member(world.raw, destination.asId(), "at").?;
         try std.testing.expectEqual(vec2, from.type);
         try std.testing.expectEqual(vec2, to.type);
     }
@@ -950,7 +950,7 @@ test "registering the same type twice changes nothing and allocates nothing" {
         try std.testing.expectEqual(before, counting.served.load(.monotonic));
 
         var members: i32 = 0;
-        while (zecs.c.ecs_struct_get_nth_member(world.raw, first, members) != null) {
+        while (zecs.c.meta.ecs_struct_get_nth_member(world.raw, first, members) != null) {
             members += 1;
         }
         try std.testing.expectEqual(@as(i32, @typeInfo(Body).@"struct".fields.len), members);
@@ -976,7 +976,7 @@ test "a C string member is flecs's string type" {
         const schema = try zecs.meta.register(world, label);
 
         const value = Label{ .text = "starboard", .weight = 3 };
-        const text = zecs.c.ecs_ptr_to_json(world.raw, schema, &value) orelse
+        const text = zecs.c.core.ecs_ptr_to_json(world.raw, schema, &value) orelse
             return error.SerializeFailed;
         defer freeFlecsString(text);
 
@@ -1072,15 +1072,15 @@ test "a readonly world is written through a stage and merged at the end" {
     const e = world.newEntity();
 
     // Stage counts have no wrapper: nothing about the call needs one.
-    zecs.c.ecs_set_stage_count(world.raw, 2);
+    zecs.c.world.ecs_set_stage_count(world.raw, 2);
     try std.testing.expectError(zecs.Error.StageOutOfRange, world.stage(2));
     try std.testing.expectError(zecs.Error.StageOutOfRange, world.stage(-1));
 
     const stage = try world.stage(1);
-    try std.testing.expect(!zecs.c.ecs_stage_is_readonly(world.raw));
+    try std.testing.expect(!zecs.c.world.ecs_stage_is_readonly(world.raw));
 
     var readonly = world.readonlyScope(false);
-    try std.testing.expect(zecs.c.ecs_stage_is_readonly(world.raw));
+    try std.testing.expect(zecs.c.world.ecs_stage_is_readonly(world.raw));
 
     // A stage is a world for every purpose except its lifetime.
     stage.set(e, position, .{ .x = 3, .y = 4 });
@@ -1088,7 +1088,7 @@ test "a readonly world is written through a stage and merged at the end" {
 
     readonly.end();
     try std.testing.expectEqual(@as(f32, 3), world.get(e, position).?.x);
-    try std.testing.expect(!zecs.c.ecs_stage_is_readonly(world.raw));
+    try std.testing.expect(!zecs.c.world.ecs_stage_is_readonly(world.raw));
 }
 
 test "a frame scope carries its delta time and counts the frame" {
@@ -1096,10 +1096,10 @@ test "a frame scope carries its delta time and counts the frame" {
     const world = try zecs.World.init();
     defer world.deinit();
 
-    const before = zecs.c.ecs_get_world_info(world.raw).frame_count_total;
+    const before = zecs.c.world.ecs_get_world_info(world.raw).frame_count_total;
 
     var f = world.frame(0.25);
-    try std.testing.expectEqual(@as(zecs.c.ecs_ftime_t, 0.25), f.delta_time);
+    try std.testing.expectEqual(@as(zecs.c.core.ecs_ftime_t, 0.25), f.delta_time);
     f.end();
     f.end();
 
@@ -1110,7 +1110,7 @@ test "a frame scope carries its delta time and counts the frame" {
 
     try std.testing.expectEqual(
         before + 2,
-        zecs.c.ecs_get_world_info(world.raw).frame_count_total,
+        zecs.c.world.ecs_get_world_info(world.raw).frame_count_total,
     );
 }
 
@@ -1132,7 +1132,7 @@ test "entities are created in bulk, with their component values" {
             try std.testing.expect(world.isAlive(e));
             try std.testing.expect(world.has(e, player));
         }
-        try std.testing.expectEqual(@as(i32, 5), zecs.c.ecs_count_id(world.raw, player.asId()));
+        try std.testing.expectEqual(@as(i32, 5), zecs.c.entity.ecs_count_id(world.raw, player.asId()));
     }
 
     var values = [_]Position{ .{ .x = 1, .y = 1 }, .{ .x = 2, .y = 2 }, .{ .x = 3, .y = 3 } };
@@ -1154,7 +1154,7 @@ test "entities are created in bulk, with their component values" {
         .data = &short,
     }));
 
-    const too_many = [_]zecs.Id{1} ** (zecs.c.FLECS_ID_DESC_MAX + 1);
+    const too_many = [_]zecs.Id{1} ** (zecs.c.core.FLECS_ID_DESC_MAX + 1);
     try std.testing.expectError(zecs.Error.TooManyIds, world.bulkInit(.{
         .count = 1,
         .ids = &too_many,
@@ -1227,7 +1227,7 @@ test "a scope guard parents what is made inside it and restores the old scope" {
     try std.testing.expectEqual(outer, world.getParent(first));
     try std.testing.expectEqual(inner_parent, world.getParent(second));
     try std.testing.expectEqual(outer, world.getParent(third));
-    try std.testing.expectEqual(@as(zecs.Entity, 0), zecs.c.ecs_get_scope(world.raw));
+    try std.testing.expectEqual(@as(zecs.Entity, 0), zecs.c.entity.ecs_get_scope(world.raw));
 
     // With the scope closed, a bare name is a root name again.
     const root_level = try world.entity(.{ .name = "root_level" });
@@ -1332,7 +1332,7 @@ test "a typed pair stores the value of whichever element carries the type" {
     try std.testing.expectEqual(@as(i32, 3), world.get(e, zecs.pairOf(damage, fire)).?.amount);
     try std.testing.expectEqual(
         damage.asId(),
-        zecs.c.ecs_get_typeid(world.raw, zecs.pairOf(damage, fire).asId()),
+        zecs.c.entity.ecs_get_typeid(world.raw, zecs.pairOf(damage, fire).asId()),
     );
 
     // First element is a plain entity, so the second one carries the type.
@@ -1340,7 +1340,7 @@ test "a typed pair stores the value of whichever element carries the type" {
     try std.testing.expectEqual(@as(i32, 5), world.get(e, zecs.pairOf(applies, damage)).?.amount);
     try std.testing.expectEqual(
         damage.asId(),
-        zecs.c.ecs_get_typeid(world.raw, zecs.pairOf(applies, damage).asId()),
+        zecs.c.entity.ecs_get_typeid(world.raw, zecs.pairOf(applies, damage).asId()),
     );
 
     // Neither element has data, so the pair is a tag and flecs agrees.
@@ -1350,7 +1350,7 @@ test "a typed pair stores the value of whichever element carries the type" {
     try std.testing.expect(world.has(e, tag_pair));
     try std.testing.expectEqual(
         @as(zecs.Entity, 0),
-        zecs.c.ecs_get_typeid(world.raw, tag_pair.asId()),
+        zecs.c.entity.ecs_get_typeid(world.raw, tag_pair.asId()),
     );
 
     // The two spellings of a pair id agree.
@@ -1556,19 +1556,19 @@ const Level = extern struct { value: i32 };
 fn describeStruct(
     world: zecs.World,
     comp: anytype,
-    members: []const zecs.c.ecs_member_t,
+    members: []const zecs.c.core.ecs_member_t,
 ) !void {
-    var desc: zecs.c.ecs_struct_desc_t = .{ .entity = comp.asId() };
+    var desc: zecs.c.meta.ecs_struct_desc_t = .{ .entity = comp.asId() };
     @memcpy(desc.members[0..members.len], members);
-    if (zecs.c.ecs_struct_init(world.raw, &desc) == 0) return error.StructInitFailed;
+    if (zecs.c.meta.ecs_struct_init(world.raw, &desc) == 0) return error.StructInitFailed;
 }
 
 fn f32Id() zecs.Entity {
-    return zecs.c.FLECS_IDecs_f32_tID_;
+    return zecs.c.core.FLECS_IDecs_f32_tID_;
 }
 
 fn i32Id() zecs.Entity {
-    return zecs.c.FLECS_IDecs_i32_tID_;
+    return zecs.c.core.FLECS_IDecs_i32_tID_;
 }
 
 test "a component value serialises to JSON with its member names and values" {
@@ -1746,7 +1746,7 @@ test "an iterator serialises to JSON containing every entity it matched" {
     // An iteration built through the raw layer serializes the same way. There is
     // nothing to defuse in that case: the caller owns the `ecs_iter_t` outright and
     // flecs has released its contents by the time this returns.
-    var raw_it = zecs.c.ecs_query_iter(world.raw, query.raw);
+    var raw_it = zecs.c.query.ecs_query_iter(world.raw, query.raw);
     const from_raw = try zecs.json.iterToJson(&raw_it, zecs.json.iter_defaults);
     defer from_raw.deinit();
     try std.testing.expectEqualStrings(json.bytes, from_raw.bytes);
@@ -1796,7 +1796,7 @@ test "the writer adapter produces exactly the bytes the owned string holds" {
     try zecs.json.writeTypeInfo(&sink.writer, world, point.asId());
     try check(try zecs.json.typeInfoToJson(world, point.asId()), sink.written());
 
-    const entity_desc: zecs.c.ecs_entity_to_json_desc_t = .{
+    const entity_desc: zecs.c.json.ecs_entity_to_json_desc_t = .{
         .serialize_values = true,
         .serialize_type_info = true,
         .serialize_full_paths = true,
@@ -1953,7 +1953,7 @@ test "flecs appends into the same buffer a Zig writer is filling" {
     defer builder.deinit();
 
     try builder.interface.writeAll("{\"payload\": ");
-    const rc = zecs.c.ecs_entity_to_json_buf(
+    const rc = zecs.c.json.ecs_entity_to_json_buf(
         world.raw,
         e,
         builder.strbuf(),
@@ -2038,11 +2038,11 @@ fn registerReflected(
     comptime name: [:0]const u8,
 ) !zecs.Component(T) {
     const comp = try world.component(T, .{ .name = name });
-    var members: [32]zecs.c.ecs_member_t = @splat(.{});
-    members[0] = .{ .name = "x", .type = zecs.c.FLECS_IDecs_f32_tID_ };
-    members[1] = .{ .name = "y", .type = zecs.c.FLECS_IDecs_f32_tID_ };
-    const desc: zecs.c.ecs_struct_desc_t = .{ .entity = comp.asId(), .members = members };
-    if (zecs.c.ecs_struct_init(world.raw, &desc) == 0) return error.StructInitFailed;
+    var members: [32]zecs.c.core.ecs_member_t = @splat(.{});
+    members[0] = .{ .name = "x", .type = zecs.c.core.FLECS_IDecs_f32_tID_ };
+    members[1] = .{ .name = "y", .type = zecs.c.core.FLECS_IDecs_f32_tID_ };
+    const desc: zecs.c.meta.ecs_struct_desc_t = .{ .entity = comp.asId(), .members = members };
+    if (zecs.c.meta.ecs_struct_init(world.raw, &desc) == 0) return error.StructInitFailed;
     return comp;
 }
 
@@ -2464,8 +2464,8 @@ test "script variables carry typed values into a script and into a string" {
         defer world.deinit();
 
         const position = try registerReflected(world, Position, "Position");
-        const f32_type = zecs.Component(f32){ .id = zecs.c.FLECS_IDecs_f32_tID_ };
-        const i32_type = zecs.Component(i32){ .id = zecs.c.FLECS_IDecs_i32_tID_ };
+        const f32_type = zecs.Component(f32){ .id = zecs.c.core.FLECS_IDecs_f32_tID_ };
+        const i32_type = zecs.Component(i32){ .id = zecs.c.core.FLECS_IDecs_i32_tID_ };
 
         var vars = try zecs.Vars.init(world);
         defer vars.deinit();
@@ -2500,8 +2500,8 @@ test "an expression evaluates to a Zig value of the type it was asked for" {
         const world = try zecs.World.init();
         defer world.deinit();
 
-        const i32_type = zecs.Component(i32){ .id = zecs.c.FLECS_IDecs_i32_tID_ };
-        const f32_type = zecs.Component(f32){ .id = zecs.c.FLECS_IDecs_f32_tID_ };
+        const i32_type = zecs.Component(i32){ .id = zecs.c.core.FLECS_IDecs_i32_tID_ };
+        const f32_type = zecs.Component(f32){ .id = zecs.c.core.FLECS_IDecs_f32_tID_ };
 
         try std.testing.expectEqual(@as(i32, 30), try zecs.evalExpr(world, "10 + 20", i32_type));
         try std.testing.expectEqual(@as(f32, 2.5), try zecs.evalExpr(world, "5.0 / 2.0", f32_type));
@@ -2513,9 +2513,9 @@ test "an expression evaluates to a Zig value of the type it was asked for" {
 
         // A malformed expression is an error. flecs has no result parameter here, so
         // the log is captured by hand to keep the failure off the console.
-        zecs.c.ecs_log_start_capture(true);
+        zecs.c.log.ecs_log_start_capture(true);
         const outcome = zecs.evalExpr(world, "10 +", i32_type);
-        if (zecs.c.ecs_log_stop_capture()) |message| zecs.freeString(std.mem.span(message));
+        if (zecs.c.log.ecs_log_stop_capture()) |message| zecs.freeString(std.mem.span(message));
         try std.testing.expectError(zecs.Error.ExpressionFailed, outcome);
     } else return error.SkipZigTest;
 }
@@ -2670,18 +2670,18 @@ test "a custom pipeline runs only the systems its query matches" {
     const secondary = try zecs.pipeline.create(world, .{
         .name = "Secondary",
         .query = .{ .terms = &.{
-            .{ .id = zecs.c.EcsSystem },
+            .{ .id = zecs.c.core.EcsSystem },
             .{ .id = in_secondary },
             .{
-                .id = zecs.c.EcsPhase,
+                .id = zecs.c.core.EcsPhase,
                 .src = .{ .id = zecs.Cascade },
                 .trav = zecs.Builtin.depends_on.id(),
             },
         } },
     });
 
-    zecs.c.ecs_set_pipeline(world.raw, secondary);
-    try std.testing.expectEqual(secondary, zecs.c.ecs_get_pipeline(world.raw));
+    zecs.c.pipeline.ecs_set_pipeline(world.raw, secondary);
+    try std.testing.expectEqual(secondary, zecs.c.core.ecs_get_pipeline(world.raw));
 
     phase_log_len = 0;
     _ = world.progress(1.0);
@@ -2714,12 +2714,12 @@ test "a timer ticks at its interval, and a rate filter divides it" {
 
     // A tick source is an entity. Passing zero asks flecs to make one; the entity it
     // returns is what a system is then pointed at.
-    const timer = zecs.c.ecs_set_interval(world.raw, 0, 0.5);
+    const timer = zecs.c.timer.ecs_set_interval(world.raw, 0, 0.5);
     try std.testing.expect(timer != 0);
-    try std.testing.expectEqual(@as(zecs.c.ecs_ftime_t, 0.5), zecs.c.ecs_get_interval(world.raw, timer));
+    try std.testing.expectEqual(@as(zecs.c.core.ecs_ftime_t, 0.5), zecs.c.timer.ecs_get_interval(world.raw, timer));
 
     // A rate filter is a tick source too, counting the ticks of another one.
-    const halved = zecs.c.ecs_set_rate(world.raw, 0, 2, timer);
+    const halved = zecs.c.timer.ecs_set_rate(world.raw, 0, 2, timer);
 
     const terms: []const zecs.Term = &.{.{ .id = player.asId() }};
     const fast = try world.system(.{
@@ -2728,7 +2728,7 @@ test "a timer ticks at its interval, and a rate filter divides it" {
         .query = .{ .terms = terms },
         .callback = zecs.callback(countTimerTick),
     });
-    zecs.c.ecs_set_tick_source(world.raw, fast, timer);
+    zecs.c.timer.ecs_set_tick_source(world.raw, fast, timer);
 
     const slow = try world.system(.{
         .name = "Slow",
@@ -2736,7 +2736,7 @@ test "a timer ticks at its interval, and a rate filter divides it" {
         .query = .{ .terms = terms },
         .callback = zecs.callback(countRateTick),
     });
-    zecs.c.ecs_set_tick_source(world.raw, slow, halved);
+    zecs.c.timer.ecs_set_tick_source(world.raw, slow, halved);
 
     timer_ticks = 0;
     rate_ticks = 0;
@@ -2757,15 +2757,15 @@ test "world stats move in the direction the world moved" {
 
     // Tens of kilobytes of sliding windows, which is exactly why this stays a raw
     // struct and only the reading of it is wrapped.
-    var stats: zecs.c.ecs_world_stats_t = .{};
+    var stats: zecs.c.stats.ecs_world_stats_t = .{};
 
-    zecs.c.ecs_world_stats_get(world.raw, &stats);
+    zecs.c.stats.ecs_world_stats_get(world.raw, &stats);
     try std.testing.expectEqual(@as(i32, 1), zecs.stats.Window.of(&stats).at);
     const before = zecs.stats.Window.of(&stats).gauge(&stats.entities.count).avg;
 
     for (0..100) |_| _ = world.newEntity();
 
-    zecs.c.ecs_world_stats_get(world.raw, &stats);
+    zecs.c.stats.ecs_world_stats_get(world.raw, &stats);
     try std.testing.expectEqual(@as(i32, 2), zecs.stats.Window.of(&stats).at);
     const after = zecs.stats.Window.of(&stats).gauge(&stats.entities.count).avg;
     try std.testing.expectEqual(before + 100, after);
@@ -2773,13 +2773,13 @@ test "world stats move in the direction the world moved" {
     _ = world.progress(1.0);
     _ = world.progress(1.0);
 
-    zecs.c.ecs_world_stats_get(world.raw, &stats);
+    zecs.c.stats.ecs_world_stats_get(world.raw, &stats);
     const frames = zecs.stats.Window.of(&stats).counter(&stats.frame.frame_count);
 
     // A counter carries the running total, and the same bytes a gauge reading would
     // return carry how much it grew since the previous sample.
     try std.testing.expectEqual(@as(f64, 2), frames.total);
-    try std.testing.expectEqual(@as(zecs.c.ecs_float_t, 2), frames.rate.avg);
+    try std.testing.expectEqual(@as(zecs.c.core.ecs_float_t, 2), frames.rate.avg);
 }
 
 test "pipeline stats name the systems the pipeline ran, and free what they allocated" {
@@ -2813,7 +2813,7 @@ test "pipeline stats name the systems the pipeline ran, and free what they alloc
     var stats: zecs.stats.PipelineStats = .{};
     defer stats.deinit();
 
-    try std.testing.expect(stats.sample(world, zecs.c.ecs_get_pipeline(world.raw)));
+    try std.testing.expect(stats.sample(world, zecs.c.core.ecs_get_pipeline(world.raw)));
 
     var seen_first = false;
     var seen_second = false;
@@ -2831,7 +2831,7 @@ test "pipeline stats name the systems the pipeline ran, and free what they alloc
 
     // Sampling again reuses the vectors rather than allocating a second pair; the
     // testing allocator is what proves both that and the release below.
-    try std.testing.expect(stats.sample(world, zecs.c.ecs_get_pipeline(world.raw)));
+    try std.testing.expect(stats.sample(world, zecs.c.core.ecs_get_pipeline(world.raw)));
 }
 
 test "an alert fires while its query matches and clears when it stops" {
@@ -2861,18 +2861,18 @@ test "an alert fires while its query matches and clears when it stops" {
     // has to be at least that long for anything to happen.
     _ = world.progress(1.0);
 
-    try std.testing.expectEqual(@as(i32, 1), zecs.c.ecs_get_alert_count(world.raw, e, alert));
-    try std.testing.expectEqual(@as(i32, 1), zecs.c.ecs_get_alert_count(world.raw, e, 0));
-    try std.testing.expect(zecs.c.ecs_get_alert(world.raw, e, alert) != 0);
+    try std.testing.expectEqual(@as(i32, 1), zecs.c.alerts.ecs_get_alert_count(world.raw, e, alert));
+    try std.testing.expectEqual(@as(i32, 1), zecs.c.alerts.ecs_get_alert_count(world.raw, e, 0));
+    try std.testing.expect(zecs.c.alerts.ecs_get_alert(world.raw, e, alert) != 0);
     try std.testing.expectEqual(
         zecs.stats.Severity.warning.id(),
-        world.getTarget(alert, zecs.c.FLECS_IDEcsAlertID_, 0),
+        world.getTarget(alert, zecs.c.core.FLECS_IDEcsAlertID_, 0),
     );
 
     world.remove(e, player);
     _ = world.progress(1.0);
 
-    try std.testing.expectEqual(@as(i32, 0), zecs.c.ecs_get_alert_count(world.raw, e, alert));
+    try std.testing.expectEqual(@as(i32, 0), zecs.c.alerts.ecs_get_alert_count(world.raw, e, alert));
 }
 
 test "a counter metric accumulates the number of entities with an id" {
@@ -2900,7 +2900,7 @@ test "a counter metric accumulates the number of entities with an id" {
     // players is three.
     _ = world.progress(1.0);
 
-    const value: zecs.Component(zecs.c.EcsMetricValue) = .{ .id = zecs.c.FLECS_IDEcsMetricValueID_ };
+    const value: zecs.Component(zecs.c.metrics.EcsMetricValue) = .{ .id = zecs.c.core.FLECS_IDEcsMetricValueID_ };
     try std.testing.expectEqual(@as(f64, 3), world.get(players, value).?.value);
 }
 
@@ -3033,7 +3033,7 @@ test "the REST component and descriptor are usable without opening a socket" {
     // it: the component exists, and nothing is listening until it is set.
     const rest = zecs.app.restComponent();
     try std.testing.expect(rest.id != 0);
-    try std.testing.expect(world.get(zecs.c.EcsWorld, rest) == null);
+    try std.testing.expect(world.get(zecs.c.core.EcsWorld, rest) == null);
 
     const desc = zecs.app.RestServerDesc{
         .port = 27750,
@@ -3046,6 +3046,6 @@ test "the REST component and descriptor are usable without opening a socket" {
 
     // ecs_rest_server_init overwrites the reply callback with its own, so the typed
     // descriptor does not offer one to be discarded.
-    try std.testing.expectEqual(@as(zecs.c.ecs_http_reply_action_t, null), c_desc.callback);
+    try std.testing.expectEqual(@as(zecs.c.core.ecs_http_reply_action_t, null), c_desc.callback);
     try std.testing.expectEqual(@as(?*anyopaque, null), c_desc.ctx);
 }

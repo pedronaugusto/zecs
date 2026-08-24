@@ -11,7 +11,7 @@
 //! make.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/iter.zig");
 const types = @import("types.zig");
 
 const Entity = types.Entity;

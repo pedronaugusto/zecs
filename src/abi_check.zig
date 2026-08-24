@@ -325,13 +325,25 @@ fn sweepOurs() Counts {
     comptime {
         var n = Counts{};
 
-        for (@typeInfo(c).@"struct".decls) |d| {
+        // One pass per module in `c.zig`'s list. A name an EARLIER module already
+        // declared is a re-export — every module re-exports the shared
+        // declarations it takes so its own callers see one namespace — and it is
+        // checked once, where it is declared. A module missing from that list is
+        // a module this check does not cover, which is why the list is the thing
+        // adding a module edits.
+        for (c.modules, 0..) |m, mi| for (@typeInfo(m).@"struct".decls) |d| {
+            var earlier = false;
+            for (c.modules, 0..) |other, oi| {
+                if (oi < mi and @hasDecl(other, d.name)) earlier = true;
+            }
+            if (earlier) continue;
+
             if (isUnrepresentable(d.name)) {
                 n.excepted += 1;
                 continue;
             }
 
-            const Decl = @TypeOf(@field(c, d.name));
+            const Decl = @TypeOf(@field(m, d.name));
             const what = "`" ++ d.name ++ "`";
 
             // An addon that is switched off takes its declarations out of the header
@@ -348,7 +360,7 @@ fn sweepOurs() Counts {
 
             // ---- types -----------------------------------------------------
             if (Decl == type) {
-                const Ours = @field(c, d.name);
+                const Ours = @field(m, d.name);
                 if (theirs(d.name, d.name) != type) {
                     fail(what ++ " is a type in src/c.zig but a value in flecs.h");
                 }
@@ -439,13 +451,13 @@ fn sweepOurs() Counts {
             }
 
             // ---- values ----------------------------------------------------
-            if (isComptimeKnown(c, d.name)) {
+            if (isComptimeKnown(m, d.name)) {
                 if (!isComptimeKnown(h, d.name)) {
                     fail(what ++ " is a compile-time constant in src/c.zig but a linked-in " ++
                         "symbol in flecs.h. Declare it `extern const`: its value is not " ++
                         "knowable until the program is linked.");
                 }
-                const ours: i128 = @field(c, d.name);
+                const ours: i128 = @field(m, d.name);
                 const them: i128 = @field(h, d.name);
                 if (ours != them) {
                     fail("constant " ++ d.name ++ " is " ++ num(ours) ++ " in src/c.zig but " ++
@@ -461,7 +473,7 @@ fn sweepOurs() Counts {
             }
             sameScalar("variable " ++ d.name, Decl, theirs(d.name, d.name));
             n.variables += 1;
-        }
+        };
 
         return n;
     }
@@ -492,7 +504,21 @@ fn sweepTheirs() Coverage {
 }
 
 fn coverOne(comptime kind: Kind, comptime name: []const u8, n: *Coverage) void {
-    if (@hasDecl(c, name)) {
+    // Which module declares it, if any. Searching the list rather than one file
+    // is what keeps this sweep honest after the split: a name is bound if some
+    // module binds it, and a module missing from `c.modules` is a module this
+    // does not see.
+    comptime var found = false;
+    inline for (c.modules) |m| {
+        if (@hasDecl(m, name)) found = true;
+    }
+    if (found) {
+        const c_home = comptime blk: {
+            for (c.modules) |m| {
+                if (@hasDecl(m, name)) break :blk m;
+            }
+            unreachable;
+        };
         if (isPending(name)) {
             fail("`" ++ name ++ "` is listed in src/abi_todo.zig but src/c.zig declares " ++
                 "it. Delete the line: that list is what is left to bind, and an entry " ++
@@ -503,7 +529,7 @@ fn coverOne(comptime kind: Kind, comptime name: []const u8, n: *Coverage) void {
         // easy to satisfy this sweep with a Zig rewrite of the macro under the
         // function's name — leaving the real symbol unbound behind a declaration that
         // looks like it. So the kind is checked too.
-        const Decl = @TypeOf(@field(c, name));
+        const Decl = @TypeOf(@field(c_home, name));
         switch (kind) {
             .function => {
                 if (@typeInfo(Decl) != .@"fn") {
@@ -523,7 +549,7 @@ fn coverOne(comptime kind: Kind, comptime name: []const u8, n: *Coverage) void {
                     fail("flecs.h exports `" ++ name ++ "` as a variable, but src/c.zig " ++
                         "declares that name as something else");
                 }
-                if (isComptimeKnown(c, name)) {
+                if (isComptimeKnown(c_home, name)) {
                     fail("`" ++ name ++ "` is a compile-time constant in src/c.zig, but " ++
                         "flecs links a symbol of that name whose value it decides at " ++
                         "runtime. Declare it `extern const`.");
@@ -691,7 +717,7 @@ test "ABI: the rewritten macros agree with the header's" {
     // full width, a value wide enough to reach the flag bits (where flecs's own macros
     // lose information, so agreement is the only correct assertion), and a generation
     // at its maximum, where the increment wraps.
-    const ids = [_]c.ecs_entity_t{
+    const ids = [_]c.core.ecs_entity_t{
         0,
         1,
         0xFFFF_FFFF,
@@ -702,9 +728,9 @@ test "ABI: the rewritten macros agree with the header's" {
     };
 
     for (ids) |a| {
-        try std.testing.expectEqual(h.ecs_entity_t_lo(a), c.ecs_entity_t_lo(a));
-        try std.testing.expectEqual(h.ecs_entity_t_hi(a), c.ecs_entity_t_hi(a));
-        try std.testing.expectEqual(h.ECS_GENERATION(a), c.ECS_GENERATION(a));
+        try std.testing.expectEqual(h.ecs_entity_t_lo(a), c.core.ecs_entity_t_lo(a));
+        try std.testing.expectEqual(h.ecs_entity_t_hi(a), c.core.ecs_entity_t_hi(a));
+        try std.testing.expectEqual(h.ECS_GENERATION(a), c.core.ECS_GENERATION(a));
 
         // ECS_GENERATION_INC is the one macro here with no comparable counterpart:
         // translate-c renders it as an expression mixing `c_int` and `u64`, which does
@@ -712,64 +738,64 @@ test "ABI: the rewritten macros agree with the header's" {
         // bump bits 32..47, wrapping, and leave every other bit alone — which is what
         // the header's `(e & ~MASK) | ((0xFFFF & (GEN(e) + 1)) << 32)` says.
         {
-            const bumped = c.ECS_GENERATION_INC(a);
-            try std.testing.expectEqual(a & ~c.ECS_GENERATION_MASK, bumped & ~c.ECS_GENERATION_MASK);
+            const bumped = c.core.ECS_GENERATION_INC(a);
+            try std.testing.expectEqual(a & ~c.core.ECS_GENERATION_MASK, bumped & ~c.core.ECS_GENERATION_MASK);
             try std.testing.expectEqual(
-                (c.ECS_GENERATION(a) +% 1) & 0xFFFF,
-                c.ECS_GENERATION(bumped),
+                (c.core.ECS_GENERATION(a) +% 1) & 0xFFFF,
+                c.core.ECS_GENERATION(bumped),
             );
         }
-        try std.testing.expectEqual(h.ECS_IS_VALUE_PAIR(a), c.ECS_IS_VALUE_PAIR(a));
-        try std.testing.expectEqual(@as(u64, h.ECS_PAIR_FIRST(a)), c.ECS_PAIR_FIRST(a));
-        try std.testing.expectEqual(@as(u64, h.ECS_PAIR_SECOND(a)), c.ECS_PAIR_SECOND(a));
+        try std.testing.expectEqual(h.ECS_IS_VALUE_PAIR(a), c.core.ECS_IS_VALUE_PAIR(a));
+        try std.testing.expectEqual(@as(u64, h.ECS_PAIR_FIRST(a)), c.core.ECS_PAIR_FIRST(a));
+        try std.testing.expectEqual(@as(u64, h.ECS_PAIR_SECOND(a)), c.core.ECS_PAIR_SECOND(a));
 
         // ECS_IS_PAIR is the second macro with no comparable counterpart: translate-c
         // renders its `||` as `bool or comptime_int`, which does not compile. Its two
         // comparisons are written out here instead, straight from flecs.h line 1026.
         try std.testing.expectEqual(
-            (a & c.ECS_ID_FLAGS_MASK) == c.ECS_PAIR or (a & c.ECS_ID_FLAGS_MASK) == c.ECS_VALUE_PAIR,
-            c.ECS_IS_PAIR(a),
+            (a & c.core.ECS_ID_FLAGS_MASK) == c.core.ECS_PAIR or (a & c.core.ECS_ID_FLAGS_MASK) == c.core.ECS_VALUE_PAIR,
+            c.core.ECS_IS_PAIR(a),
         );
 
         // Not the same predicate, and worth pinning down because the names suggest it
         // is: the library's `ecs_id_is_pair` is `id & ECS_PAIR`, a single bit test, so
         // it answers yes for `ECS_AUTO_OVERRIDE | ecs_pair(...)` where the macro
         // answers no. Both are bound, under their own names, doing their own thing.
-        try std.testing.expectEqual((a & c.ECS_PAIR) != 0, c.ecs_id_is_pair(a));
+        try std.testing.expectEqual((a & c.core.ECS_PAIR) != 0, c.world.ecs_id_is_pair(a));
 
         for (ids) |b| {
-            try std.testing.expectEqual(h.ecs_entity_t_comb(a, b), c.ecs_entity_t_comb(a, b));
-            try std.testing.expectEqual(h.ecs_pair(a, b), c.ecs_pair(a, b));
-            try std.testing.expectEqual(h.ecs_value_pair(a, b), c.ecs_value_pair(a, b));
+            try std.testing.expectEqual(h.ecs_entity_t_comb(a, b), c.core.ecs_entity_t_comb(a, b));
+            try std.testing.expectEqual(h.ecs_pair(a, b), c.core.ecs_pair(a, b));
+            try std.testing.expectEqual(h.ecs_value_pair(a, b), c.core.ecs_value_pair(a, b));
         }
     }
 
     // And the round trip flecs itself relies on, on ids inside the domain the pair
     // encoding can actually represent.
-    const first: c.ecs_entity_t = 0x0123_4567;
-    const second: c.ecs_entity_t = 0x89AB_CDEF;
-    const pair = c.ecs_pair(first, second);
-    try std.testing.expect(c.ECS_IS_PAIR(pair));
-    try std.testing.expect(!c.ECS_IS_VALUE_PAIR(pair));
-    try std.testing.expectEqual(first, c.ECS_PAIR_FIRST(pair));
-    try std.testing.expectEqual(second, c.ECS_PAIR_SECOND(pair));
+    const first: c.core.ecs_entity_t = 0x0123_4567;
+    const second: c.core.ecs_entity_t = 0x89AB_CDEF;
+    const pair = c.core.ecs_pair(first, second);
+    try std.testing.expect(c.core.ECS_IS_PAIR(pair));
+    try std.testing.expect(!c.core.ECS_IS_VALUE_PAIR(pair));
+    try std.testing.expectEqual(first, c.core.ECS_PAIR_FIRST(pair));
+    try std.testing.expectEqual(second, c.core.ECS_PAIR_SECOND(pair));
 
-    const value_pair = c.ecs_value_pair(first, second);
-    try std.testing.expect(c.ECS_IS_VALUE_PAIR(value_pair));
-    try std.testing.expect(c.ECS_IS_PAIR(value_pair));
+    const value_pair = c.core.ecs_value_pair(first, second);
+    try std.testing.expect(c.core.ECS_IS_VALUE_PAIR(value_pair));
+    try std.testing.expect(c.core.ECS_IS_PAIR(value_pair));
 
     // The library agrees with both, which is what makes this more than two
     // reimplementations of the same misreading.
-    try std.testing.expectEqual(pair, c.ecs_make_pair(first, second));
-    try std.testing.expect(c.ecs_id_is_pair(pair));
-    try std.testing.expect(c.ecs_id_is_pair(value_pair));
-    try std.testing.expect(!c.ECS_IS_PAIR(c.ECS_AUTO_OVERRIDE | pair));
-    try std.testing.expect(c.ecs_id_is_pair(c.ECS_AUTO_OVERRIDE | pair));
+    try std.testing.expectEqual(pair, c.world.ecs_make_pair(first, second));
+    try std.testing.expect(c.world.ecs_id_is_pair(pair));
+    try std.testing.expect(c.world.ecs_id_is_pair(value_pair));
+    try std.testing.expect(!c.core.ECS_IS_PAIR(c.core.ECS_AUTO_OVERRIDE | pair));
+    try std.testing.expect(c.world.ecs_id_is_pair(c.core.ECS_AUTO_OVERRIDE | pair));
 }
 
 test "ABI: the id masks match the header's" {
-    try std.testing.expectEqual(@as(c.ecs_id_t, h.ECS_ID_FLAGS_MASK), c.ECS_ID_FLAGS_MASK);
-    try std.testing.expectEqual(@as(c.ecs_id_t, h.ECS_ENTITY_MASK), c.ECS_ENTITY_MASK);
-    try std.testing.expectEqual(@as(c.ecs_id_t, h.ECS_GENERATION_MASK), c.ECS_GENERATION_MASK);
-    try std.testing.expectEqual(@as(c.ecs_id_t, h.ECS_COMPONENT_MASK), c.ECS_COMPONENT_MASK);
+    try std.testing.expectEqual(@as(c.core.ecs_id_t, h.ECS_ID_FLAGS_MASK), c.core.ECS_ID_FLAGS_MASK);
+    try std.testing.expectEqual(@as(c.core.ecs_id_t, h.ECS_ENTITY_MASK), c.core.ECS_ENTITY_MASK);
+    try std.testing.expectEqual(@as(c.core.ecs_id_t, h.ECS_GENERATION_MASK), c.core.ECS_GENERATION_MASK);
+    try std.testing.expectEqual(@as(c.core.ecs_id_t, h.ECS_COMPONENT_MASK), c.core.ECS_COMPONENT_MASK);
 }

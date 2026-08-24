@@ -22,7 +22,7 @@
 //!   the rest is `zecs.c`.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/core.zig");
 const options = @import("zecs_options");
 const component_mod = @import("component.zig");
 const world_mod = @import("world.zig");
@@ -135,7 +135,7 @@ pub const Rest = struct {
 };
 
 /// The `EcsRest` component, typed, so the ordinary `World.get` and `World.set` reach
-/// it: `world.get(zecs.c.EcsWorld, zecs.app.restComponent())`.
+/// it: `world.get(zecs.c.core.EcsWorld, zecs.app.restComponent())`.
 ///
 /// Zero until the rest module has been imported, which `World.init` does and
 /// `World.initMinimal` does not.
@@ -207,9 +207,9 @@ pub const RestServerDesc = struct {
 ///
 /// Creating one does not open a port and does not answer anything. Two raw calls
 /// finish the job, and they stay raw because each is one line that adds no type:
-/// `zecs.c.ecs_http_server_start(server.raw)` spawns the threads that listen, and
+/// `zecs.c.core.ecs_http_server_start(server.raw)` spawns the threads that listen, and
 /// needs the OS API implementation addon for them; and
-/// `zecs.c.ecs_http_server_dequeue(server.raw, delta_time)` has to be called every
+/// `zecs.c.core.ecs_http_server_dequeue(server.raw, delta_time)` has to be called every
 /// frame, because a started server queues requests and replies to none until it is.
 pub const RestServer = struct {
     raw: *c.ecs_http_server_t,

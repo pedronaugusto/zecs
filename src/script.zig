@@ -38,7 +38,7 @@
 //! addon is a compile error naming the option.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/script.zig");
 const options = @import("zecs_options");
 const types = @import("types.zig");
 const component_mod = @import("component.zig");
@@ -107,7 +107,7 @@ pub const ParseDesc = struct {
 pub const EvalDesc = struct {
     /// Variables the script can read. See `Vars`.
     vars: ?Vars = null,
-    /// A runtime to reuse across evaluations, from `zecs.c.ecs_script_runtime_new`.
+    /// A runtime to reuse across evaluations, from `zecs.c.script.ecs_script_runtime_new`.
     /// With none, flecs makes one for the call and throws it away afterwards.
     runtime: ?*c.ecs_script_runtime_t = null,
     diagnostic: ?*Diagnostic = null,
@@ -224,7 +224,7 @@ pub const Script = struct {
     /// script; `colors` adds terminal escapes.
     ///
     /// The caller owns the string and frees it with `zecs.freeString`. The strbuf form,
-    /// `zecs.c.ecs_script_ast_to_buf`, is raw: it writes into flecs's string builder,
+    /// `zecs.c.script.ecs_script_ast_to_buf`, is raw: it writes into flecs's string builder,
     /// which has its own adapter.
     pub fn astToString(self: Script, colors: bool) ?[:0]u8 {
         requireAddon();

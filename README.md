@@ -112,7 +112,7 @@ them is normal rather than an escape:
 
 ```zig
 const world = try zecs.World.init();
-zecs.c.ecs_set_target_fps(world.raw, 60); // whatever the wrapper has not covered
+zecs.c.world.ecs_set_target_fps(world.raw, 60); // whatever the wrapper has not covered
 ```
 
 And for anything not declared even in `zecs.c` — flecs has a large surface, and this

@@ -24,7 +24,7 @@
 //! surface without adding type information, which is the case against writing it.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/value.zig");
 const types = @import("types.zig");
 const world_mod = @import("world.zig");
 const Error = @import("error.zig").Error;
