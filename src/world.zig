@@ -815,7 +815,6 @@ pub const World = struct {
         c.ecs_exclusive_access_begin(self.raw, thread_name.ptr);
         return .{ .world = self.raw };
     }
-
 };
 
 //=============================================================================
