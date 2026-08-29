@@ -735,7 +735,7 @@ test "every integer and float width flecs has maps to its primitive" {
     try std.testing.expectEqual(Primitive.string, primitiveOf([*:0]const u8).?);
     try std.testing.expectEqual(Primitive.string, primitiveOf(?[*:0]const u8).?);
 
-    // An entity is a u64 and nothing in the type says otherwise, which is why a struct
+    // An entity is a u64 and nothing in the type says otherwise, so a struct
     // has to name the fields it means as entities.
     try std.testing.expectEqual(Primitive.u64, primitiveOf(Entity).?);
 

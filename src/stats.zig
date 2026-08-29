@@ -98,7 +98,7 @@ pub const Window = struct {
     ///
     /// Reading a counter this way is meaningful and gives its rate: flecs stores a
     /// counter's rate in the same bytes the gauge occupies. Reading a gauge as a
-    /// counter is not, which is why the two are separate calls.
+    /// counter is not, so the two are separate calls.
     pub inline fn gauge(self: Window, m: *const c.ecs_metric_t) Gauge {
         const slot: usize = @intCast(self.at);
         return .{

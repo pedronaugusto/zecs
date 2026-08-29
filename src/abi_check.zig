@@ -329,7 +329,7 @@ fn sweepOurs() Counts {
         // declared is a re-export — every module re-exports the shared
         // declarations it takes so its own callers see one namespace — and it is
         // checked once, where it is declared. A module missing from that list is
-        // a module this check does not cover, which is why the list is the thing
+        // a module this check does not cover, so the list is the thing
         // adding a module edits.
         for (c.modules, 0..) |m, mi| for (@typeInfo(m).@"struct".decls) |d| {
             var earlier = false;

@@ -31,7 +31,7 @@
 //! A buffer's first 512 bytes live in an array inside the struct, and `content` points
 //! at that array until the string outgrows it. Copying the struct by value after
 //! anything has been appended therefore leaves the copy pointing into the original. A
-//! buffer must stay where it was first written to, which is why everything here takes
+//! buffer must stay where it was first written to, so everything here takes
 //! `*c.ecs_strbuf_t` and why `Builder` says not to move it.
 
 const std = @import("std");

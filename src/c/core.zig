@@ -1265,7 +1265,7 @@ pub extern fn flecs_query_trivial_cached_next(it: *ecs_iter_t) bool;
 
 /// Panic unless the calling thread holds exclusive write access to the world. flecs calls
 /// this itself before mutating; it becomes an empty macro without the exclusive access
-/// addon, which is why the ABI guard treats it as one.
+/// addon, so the ABI guard treats it as one.
 pub extern fn flecs_check_exclusive_world_access_write(world: *const ecs_world_t) void;
 
 /// Same as flecs_check_exclusive_world_access_write(), but for read access.

@@ -52,7 +52,7 @@ pub const ecs_counter_t = extern struct {
     value: [60]f64 = @splat(0),
 };
 
-/// Make all metrics the same size, so we can iterate over fields.
+/// Every metric is the same size, so the fields can be iterated over.
 pub const ecs_metric_t = extern union {
     gauge: ecs_gauge_t,
     counter: ecs_counter_t,
