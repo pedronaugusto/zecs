@@ -107,8 +107,8 @@ pub fn initAction(comptime handler: fn (world: World) void) c.ecs_app_init_actio
 ///
 /// The world is still yours afterwards. flecs's header says it is cleaned up, and it
 /// is not: the default run action calls `ecs_quit`, which sets the quit flag and
-/// nothing more. Keep the `defer world.deinit()` — and note that a world that has quit
-/// stays quit, so `World.progress` returns false from then on.
+/// nothing more. Keep the `defer world.deinit()`. A world that has quit stays
+/// quit, so `World.progress` returns false from then on.
 ///
 /// Needs the app addon.
 pub fn run(world: World, desc: AppDesc) Error!void {

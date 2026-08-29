@@ -59,8 +59,8 @@ const std = @import("std");
 /// The raw flecs declarations, one namespace per area — `c.entity`, `c.query`,
 /// `c.meta` and so on. This is the escape hatch: anything the typed surface
 /// does not wrap is reachable here, ABI-checked, and documented as a
-/// first-class way to call it. It used to be one flat namespace; the area is
-/// now part of the path, so `core.ecs_new` is `c.entity.ecs_new`.
+/// first-class way to call it. The area is part of the path, so `core.ecs_new`
+/// is `c.entity.ecs_new`.
 pub const c = @import("c.zig");
 
 /// Shorthand for the area this file itself happens to need.

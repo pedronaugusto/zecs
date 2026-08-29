@@ -37,7 +37,7 @@
 //! four to convert two diagnostic strings is a worse trade than `.ptr` at the call
 //! site.
 //!
-//! What a mirror would have quietly fixed, and what is therefore worth stating instead:
+//! What a mirror would have quietly fixed, and what is stated here instead:
 //! **a zeroed descriptor is not flecs's default.** `ECS_ENTITY_TO_JSON_INIT` and
 //! `ECS_ITER_TO_JSON_INIT` turn several flags on that `{0}` leaves off, and flecs's own
 //! serializers read a null descriptor as "all of them on" — three different meanings
@@ -364,8 +364,8 @@ pub fn worldFromJson(
 
 /// Loads a world from a JSON file.
 ///
-/// This one returns nothing, unlike the three above, and the reason is a defect in
-/// flecs rather than a choice: `ecs_world_from_json_file` reads the file into a buffer,
+/// This one returns nothing, unlike the three above — a defect in flecs rather
+/// than a choice: `ecs_world_from_json_file` reads the file into a buffer,
 /// parses it, frees the buffer, and then returns the parse position — which points into
 /// the block it just freed. There is nothing safe to hand back, so nothing is.
 ///

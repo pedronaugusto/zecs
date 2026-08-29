@@ -83,7 +83,7 @@ var installed: std.mem.Allocator = undefined;
 var callbacks_installed: bool = false;
 
 /// Worlds alive right now, as far as this package can see. Worlds created through the
-/// raw C API are invisible here, which is why the allocation counters are consulted too.
+/// raw C API are invisible here, so the allocation counters are consulted too.
 var worlds_alive: usize = 0;
 
 /// Live bytes and blocks. Only maintained when `-Dtrack_allocations` is on, which

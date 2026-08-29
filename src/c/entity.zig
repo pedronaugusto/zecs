@@ -226,7 +226,7 @@ pub extern fn ecs_get_parent(world: *const ecs_world_t, entity: ecs_entity_t) ec
 pub extern fn ecs_get_name(world: *const ecs_world_t, entity: ecs_entity_t) ?[*:0]const u8;
 
 /// Name an entity. A null name removes the name it had; entity 0 creates a new entity
-/// with this name and returns it, which is why this returns an entity at all.
+/// with this name and returns it, so this returns an entity at all.
 pub extern fn ecs_set_name(world: *ecs_world_t, entity: ecs_entity_t, name: ?[*:0]const u8) ecs_entity_t;
 
 pub extern fn ecs_lookup(world: *const ecs_world_t, path: [*:0]const u8) ecs_entity_t;

@@ -284,8 +284,8 @@ pub const Table = struct {
     /// entities have no such relationship, one for the children of those, and so on.
     ///
     /// Null when flecs could not answer. `rel` has to be acyclic, and flecs aborts on
-    /// one that is not rather than returning, so in practice this is null only in a
-    /// build with `-Dsoft_assert`.
+    /// one that is not rather than returning, so this is null only in a build
+    /// with `-Dsoft_assert`.
     pub fn depth(self: Table, rel: Entity) ?usize {
         const found = c.ecs_table_get_depth(self.world, self.raw, rel);
         return if (found < 0) null else @intCast(found);

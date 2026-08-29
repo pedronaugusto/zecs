@@ -14,7 +14,7 @@ const core = @import("core.zig");
 pub const va_list = core.va_list;
 
 /// Log that an operation is deprecated. Compiled away to nothing when the log addon is
-/// off, which is why the ABI guard treats this name specially.
+/// off, so the ABI guard treats this name specially.
 pub extern fn ecs_deprecated_(file: ?[*:0]const u8, line: i32, msg: ?[*:0]const u8) void;
 
 /// Description for one of the `ECS_*` error codes. Static storage; do not free it.

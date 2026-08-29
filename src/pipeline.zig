@@ -208,7 +208,7 @@ pub fn import(world: World, comptime M: type) Error!Entity {
             // What `ECS_MODULE` does, and in the order it does it: register the entity
             // `ecs_import` is about to look for, then make it the scope, so everything
             // the module creates is nested under it. `ecs_module_init` restores the
-            // scope it found rather than setting the new one, which is why the second
+            // scope it found rather than setting the new one, so the second
             // call is not optional. `ecs_import` puts the old scope back afterwards.
             const module = c.ecs_module_init(raw, name.ptr, &.{});
             _ = c.ecs_set_scope(raw, module);
