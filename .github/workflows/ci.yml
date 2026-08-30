@@ -297,6 +297,20 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
       - run: ci/mutate.sh
 
+  # src/api_tiers.zig partitions what this package binds into flecs's API and flecs's
+  # insides. This job fails if that partition is stale — and, more importantly, if
+  # anything above the raw layer has started calling one of the insides, which is a
+  # dependency no ABI comparison can see: a renamed internal moves on both sides at once.
+  api-tiers:
+    name: api tiers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - run: zig build api-tiers-check
+
   # src/abi_manifest.zig is the list of every symbol flecs exports, generated from the
   # vendored header. If it is stale, the ABI guard is measuring coverage against what
   # flecs used to export — which is exactly when a re-vendor could add API nobody binds.

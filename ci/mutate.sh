@@ -38,6 +38,7 @@ C=src/c
 TODO_FILE=src/abi_todo.zig
 ABI_FILE=src/c/abi.zig
 COMPONENT_FILE=src/component.zig
+WORLD_FILE=src/world.zig
 
 # One backup of the whole of src/. The mutations reach past the declaration modules now
 # — a refusal in the typed layer is proved by planting the thing it refuses — and three
@@ -62,7 +63,8 @@ SURVIVORS=()
 # compile error by construction, so every defect below is visible the moment the test
 # module is analysed — and a suite that failed to compile has nothing left to run.
 # Seventeen full test runs took seventeen minutes; seventeen compiles take under two.
-BUILD=(zig build test-compile -Daddons=everything)
+DEFAULT_BUILD=(zig build test-compile -Daddons=everything)
+BUILD=("${DEFAULT_BUILD[@]}")
 
 # apply <path-or-directory> <python-expression-file-rewrite>
 #
@@ -346,6 +348,22 @@ s = s.replace("""fn hasDeinit(comptime T: type) bool {""",
 
 fn hasDeinit(comptime T: type) bool {""", 1)
 ' 'zecs cannot derive a destructor'
+
+printf '\n%sThe API tiers%s\n' "$BOLD" "$OFF"
+
+# Not a compile error, so this one case is scored against the step that IS the gate.
+# flecs's insides carry no stability contract, and a typed API standing on one breaks at
+# the next re-vendor somewhere no ABI comparison can reach: the guard compares what is
+# declared, and both sides of a renamed internal move together.
+BUILD=(zig build api-tiers-check)
+
+mutate 'tiers: the typed layer reaches into flecs' "$WORLD_FILE" '
+s = s.replace("""pub const World = struct {""",
+              """pub const World = struct {
+    const planted = c.core.flecs_balloc;""", 1)
+' 'the typed layer calls'
+
+BUILD=("${DEFAULT_BUILD[@]}")
 
 printf '\n%sThe link%s\n' "$BOLD" "$OFF"
 

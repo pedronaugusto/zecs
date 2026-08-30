@@ -75,6 +75,12 @@ run 'zig fmt' zig fmt --check src tests bench tools examples build.zig
 # exactly the moment a re-vendor could add API nobody notices.
 run 'abi manifest is current' zig build abi-manifest-check
 
+# src/api_tiers.zig partitions what this package binds into flecs's API and flecs's
+# insides. Stale means a doc that says the wrong thing; a typed-layer call into the
+# insides means a dependency that breaks at the next re-vendor, somewhere no ABI
+# comparison can see it.
+run 'api tiers are current' zig build api-tiers-check
+
 # The published API reference is generated from the doc comments, so a doc comment that
 # does not compile is a broken reference rather than a cosmetic problem.
 run 'docs generate' zig build docs
