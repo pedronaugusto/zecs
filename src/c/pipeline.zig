@@ -22,6 +22,7 @@ pub const ecs_entity_t = core.ecs_entity_t;
 pub const ecs_ftime_t = core.ecs_ftime_t;
 pub const ecs_query_desc_t = core.ecs_query_desc_t;
 pub const ecs_world_t = core.ecs_world_t;
+pub const ecs_delete = entity.ecs_delete;
 pub const ecs_set_scope = entity.ecs_set_scope;
 pub const FlecsMetricsImport = metrics.FlecsMetricsImport;
 pub const ecs_set_interval = timer.ecs_set_interval;
