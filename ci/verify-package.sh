@@ -17,7 +17,15 @@
 #
 #   * everything git tracks at the top level is named in `paths`, except the entries
 #     below, which are git's own bookkeeping and mean nothing to a consumer;
-#   * everything `paths` names exists.
+#   * everything `paths` names exists;
+#   * nothing git tracks is something `.gitignore` calls scratch.
+#
+# The third direction has the same cause as the first and cost the same way. A section
+# lifted out of `src/component.zig` while it was being edited was saved as
+# `src/_hooks_section.tmp`, committed, and shipped — `paths` names `src`, so a stray file
+# inside it needs no entry of its own and neither of the first two checks can see it. The
+# list of what counts as scratch is not written here: `git check-ignore` is asked, so
+# `.gitignore` stays the one home and a pattern added there is a gate for free.
 #
 # Usage:
 #   ci/verify-package.sh
@@ -79,6 +87,16 @@ while IFS= read -r entry; do
   fi
 done < <(git ls-tree --name-only HEAD)
 
+printf 'tracked files this repository calls scratch\n'
+# `--no-index` is what makes this work: git normally reports a tracked file as NOT
+# ignored, because being tracked overrides the rules. The flag asks the rules alone, so
+# a file added before its pattern existed — or added past it — is still named.
+while IFS= read -r scratch; do
+  [ -z "$scratch" ] && continue
+  printf '  %sscratch:%s %s\n' "$RED" "$OFF" "$scratch"
+  failures=$((failures + 1))
+done < <(git ls-files -c | git check-ignore --no-index --stdin)
+
 printf '\n'
 if [ "$failures" -eq 0 ]; then
   printf '%sbuild.zig.zon ships the repository%s\n' "$GREEN" "$OFF"
@@ -87,5 +105,7 @@ fi
 
 printf '%s%d discrepancies between build.zig.zon and the repository%s\n' "$RED" "$failures" "$OFF"
 printf 'Add the entry to .paths, or — if it genuinely should not ship — to NOT_SHIPPED\n'
-printf 'in this script, where the reason has to be written down.\n'
+printf 'in this script, where the reason has to be written down. A file reported as\n'
+printf 'scratch belongs outside the repository: delete it, or drop the .gitignore rule\n'
+printf 'that calls it scratch, but do not ship it.\n'
 exit 1
