@@ -80,6 +80,20 @@ own claims; each one is a defect the previous release shipped.
 
 ### Added
 
+- **A typed query layer.** `World.queryOf` and `QueryOf(Tuple)` take the terms as a Zig
+  tuple type and hand back a row whose fields are already the right slices, so the term
+  order and the field indices are one list instead of two. `zecs.in`, `out`, `optional`,
+  `without`, `withId`, `withoutId` and `term` mark a term; `RowOf`, `SpecOf` and
+  `TermOptions` are the types behind them; `QueryOf.each` runs a body per entity.
+- **Ordering and grouping.** `QueryOptions` carries `order_by` and `group_by` — with
+  `types.OrderBy`, `types.GroupBy`, `zecs.orderBy`, `orderByEntity`, `orderByEntityId`
+  and `groupBy` to build them — plus `Query.iterGroup` and `Query.groupInfo`.
+  `QueryDesc`'s `cache_kind`, `flags`, `entity` and `ctx` moved into `.options`.
+- **Prefabs and inheritance, typed.** `World.prefab`, `World.isA`, `World.clone`,
+  `World.inheritOnInstantiate`, `World.overrideOnInstantiate` and
+  `World.dontInheritOnInstantiate`, with `World.notDuplicable` and
+  `zecs.duplicable`/`componentIsStorable`/`max_component_alignment` for what a component
+  can and cannot survive.
 - `World.emplace`/`emplaceId`, `World.count`/`countId`, `World.enable` for an entity,
   `World.enableComponent`/`enableComponentId` and `World.isEnabled`/`isEnabledId` for one
   component on one entity, and the singleton family — `singletonAdd`, `singletonRemove`,
