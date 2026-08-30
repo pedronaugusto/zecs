@@ -771,6 +771,171 @@ test "a typed query hands back slices of the type the handle carried" {
     try std.testing.expectEqual(@as(u32, 1), healthy);
 }
 
+//=============================================================================
+// Ordering and grouping
+//
+// Both are properties of the query cache, and both were unreachable from the typed
+// layer: a query could match the right entities and hand them back in an order nothing
+// in the program chose.
+//=============================================================================
+
+test "order_by delivers the matched entities in the order the comparator asks for" {
+    try zecs.setAllocator(std.testing.allocator);
+    const world = try zecs.World.init();
+    defer world.deinit();
+
+    const depth = try world.component(Depth, .{});
+
+    for ([_]i32{ 3, 1, 2 }) |level| {
+        const e = world.newEntity();
+        world.set(e, depth, .{ .level = level });
+    }
+
+    const q = try world.queryOf(.{depth}, .{
+        .order_by = .{
+            .component = depth.asId(),
+            .compare = zecs.orderBy(Depth, struct {
+                fn cmp(_: zecs.Entity, a: *const Depth, _: zecs.Entity, b: *const Depth) std.math.Order {
+                    return std.math.order(a.level, b.level);
+                }
+            }.cmp),
+        },
+    });
+    defer q.deinit();
+
+    var seen: [3]i32 = .{ 0, 0, 0 };
+    var n: usize = 0;
+    var it = q.iter();
+    defer it.deinit();
+    while (it.next()) |row| {
+        const levels = row.fields[0];
+        for (levels) |d| {
+            seen[n] = d.level;
+            n += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 3), n);
+    try std.testing.expectEqualSlices(i32, &.{ 1, 2, 3 }, &seen);
+
+    // Sorting forces a cache, whatever the cache kind asked for.
+    try std.testing.expect(q.query.cacheKind() != .none);
+}
+
+test "group_by splits the results, and one group can be iterated alone" {
+    try zecs.setAllocator(std.testing.allocator);
+    const world = try zecs.World.init();
+    defer world.deinit();
+
+    const position = try world.component(Position, .{});
+    const faction = try world.entity(.{ .name = "Faction" });
+    const red = try world.entity(.{ .name = "Red" });
+    const blue = try world.entity(.{ .name = "Blue" });
+
+    const a = world.newEntity();
+    world.set(a, position, .{ .x = 1, .y = 0 });
+    world.addPair(a, faction, red);
+
+    const b = world.newEntity();
+    world.set(b, position, .{ .x = 2, .y = 0 });
+    world.addPair(b, faction, blue);
+
+    const cc = world.newEntity();
+    world.set(cc, position, .{ .x = 4, .y = 0 });
+    world.addPair(cc, faction, red);
+
+    const q = try world.queryOf(
+        .{ position, zecs.withId(zecs.pair(faction, zecs.Builtin.wildcard.id())) },
+        .{ .group_by = .{ .id = faction } },
+    );
+    defer q.deinit();
+
+    // Every group, then one.
+    var total: f32 = 0;
+    var it = q.iter();
+    defer it.deinit();
+    while (it.next()) |row| for (row.fields[0]) |p| {
+        total += p.x;
+    };
+    try std.testing.expectEqual(@as(f32, 7), total);
+
+    var reds: f32 = 0;
+    var red_it = q.iterGroup(red);
+    defer red_it.deinit();
+    while (red_it.next()) |row| for (row.fields[0]) |p| {
+        reds += p.x;
+    };
+    try std.testing.expectEqual(@as(f32, 5), reds);
+
+    // And flecs knows the group exists, which is what `on_group_create` hangs off.
+    try std.testing.expect(q.query.groupInfo(red) != null);
+    try std.testing.expect(q.query.groupInfo(999_999) == null);
+}
+
+test "a pipeline orders the systems of one phase instead of leaving them to table order" {
+    try zecs.setAllocator(std.testing.allocator);
+    if (!zecs.options.addon_pipeline) return error.SkipZigTest;
+
+    // The defect this guards against is a pipeline that matches the right systems and
+    // runs them in whatever order their tables happen to be in. `PipelineDesc.toC`
+    // installs flecs's own tie-break — entity id, which is creation order — when the
+    // caller sets none, so the descriptor handed to flecs always carries a comparator.
+    const built = try (zecs.pipeline.PipelineDesc{}).toC(0);
+    try std.testing.expect(built.query.order_by_callback != null);
+
+    // And a caller who chooses an ordering keeps it.
+    const mine = zecs.orderByEntity(struct {
+        fn cmp(e1: zecs.Entity, e2: zecs.Entity) std.math.Order {
+            return std.math.order(e2, e1);
+        }
+    }.cmp);
+    const custom = try (zecs.pipeline.PipelineDesc{
+        .query = .{ .options = .{ .order_by = .{ .compare = mine } } },
+    }).toC(0);
+    try std.testing.expectEqual(mine, custom.query.order_by_callback);
+}
+
+test "same-phase systems run in creation order" {
+    try zecs.setAllocator(std.testing.allocator);
+    if (!zecs.options.addon_pipeline) return error.SkipZigTest;
+
+    const world = try zecs.World.init();
+    defer world.deinit();
+
+    phase_order_log = .{ 0, 0, 0 };
+    phase_order_n = 0;
+
+    const first = try world.system(.{
+        .name = "First",
+        .phase = zecs.Builtin.on_update.id(),
+        .callback = zecs.callback(logFirst),
+    });
+    const second = try world.system(.{
+        .name = "Second",
+        .phase = zecs.Builtin.on_update.id(),
+        .callback = zecs.callback(logSecond),
+    });
+    // The contract is entity-id order, and flecs hands out ascending ids, so the system
+    // created first is the one that runs first.
+    try std.testing.expect(first < second);
+
+    _ = world.progress(0);
+    try std.testing.expectEqual(@as(usize, 2), phase_order_n);
+    try std.testing.expectEqualSlices(u8, &.{ 1, 2 }, phase_order_log[0..2]);
+}
+
+var phase_order_log: [3]u8 = .{ 0, 0, 0 };
+var phase_order_n: usize = 0;
+
+fn logFirst(_: *zecs.Iter) void {
+    phase_order_log[phase_order_n] = 1;
+    phase_order_n += 1;
+}
+
+fn logSecond(_: *zecs.Iter) void {
+    phase_order_log[phase_order_n] = 2;
+    phase_order_n += 1;
+}
+
 test "a system with no phase runs only when asked" {
     try zecs.setAllocator(std.testing.allocator);
     const world = try zecs.World.init();
