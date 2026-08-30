@@ -273,6 +273,16 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
       - run: zig build test -Daddons=everything -Dtarget=x86_64-windows-msvc
 
+  # build.zig.zon's `paths` is what a consumer receives, and nothing inside the
+  # repository can notice an entry missing from it: every local build reads the working
+  # tree instead. The gap only appears for someone depending on the package by hash.
+  package-contents:
+    name: package contents
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ci/verify-package.sh
+
   # Proves libs/ is still a pristine copy of the pinned upstream commit, rather than a
   # claim in a markdown file. Needs network, so it is its own job and is not part of
   # the local inner loop.
