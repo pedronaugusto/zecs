@@ -22,6 +22,18 @@ zig-out/
 *.dll
 *.bak
 
+# Scratch. A section of a source file lifted out while editing it, a patch
+# leftover, an editor's swap file: none of them are the package, and one of them
+# was committed into src/ and shipped before this line existed.
+# `ci/verify-package.sh` reads THIS file to decide what counts as scratch, so a
+# pattern added here is also the gate — a tracked file matching any rule below
+# fails the build rather than riding along into a release.
+*.tmp
+*.orig
+*.rej
+*.swp
+*~
+
 # The example is a separate build graph with its own cache.
 examples/*/.zig-cache/
 examples/*/zig-out/
