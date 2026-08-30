@@ -770,6 +770,15 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| bench_run.addArgs(args);
     const bench_step = b.step("bench", "Run the zecs benchmarks");
     bench_step.dependOn(&bench_run.step);
+
+    // Compiling the benchmark without running it, because running it takes minutes and
+    // compiling it is what CI actually needs. The benchmark is the package's only
+    // consumer of the public API that is not a test, and nothing compiled it: a rename
+    // in `QueryDesc` left it broken through several commits, found by hand rather than
+    // by a gate. A source in the repository that no step compiles is a source that
+    // rots.
+    const bench_compile_step = b.step("bench-compile", "Compile the benchmarks without running them");
+    bench_compile_step.dependOn(&bench.step);
 }
 
 /// The canonical preprocessor state for the ABI manifest: every addon on, checks on,

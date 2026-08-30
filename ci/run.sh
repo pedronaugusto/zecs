@@ -89,6 +89,11 @@ run 'api tiers are current' zig build api-tiers-check
 # does not compile is a broken reference rather than a cosmetic problem.
 run 'docs generate' zig build docs
 
+# The benchmark is the only consumer of the public API in this repository that is not a
+# test, and nothing used to compile it — so a rename in QueryDesc left it broken for
+# several commits. Compiled, not run: a run takes minutes and measures the laptop.
+run 'benchmarks compile' zig build bench-compile -Doptimize=ReleaseFast
+
 #-----------------------------------------------------------------------------
 section 'Tests — native'
 #-----------------------------------------------------------------------------
