@@ -16,6 +16,24 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// The integer a C `enum` compiles to, for an enum whose enumerators are all
+/// non-negative and fit in `int` — which every enum flecs declares is
+/// [read-from-source: `ecs_inout_kind_t`, `ecs_oper_kind_t`,
+/// `ecs_query_cache_kind_t`, `ecs_http_method_t`, `ecs_primitive_kind_t`,
+/// `ecs_type_kind_t` and `ecs_meta_op_kind_t` in `libs/flecs/flecs.h`; the lowest
+/// enumerator anywhere is 0].
+///
+/// MSVC gives every enum `int`. Clang and gcc follow the Itanium rule and pick
+/// `unsigned int` when no enumerator is negative. Same width, opposite signedness —
+/// so hard-coding either one is correct on one Windows ABI and wrong on the other,
+/// which is exactly the drift the guard caught on `ecs_query_desc_t.cache_kind`.
+///
+/// The raw layer mirrors these as the integer rather than as a Zig `enum` on purpose:
+/// flecs stores values in these fields that its own header does not enumerate, and a
+/// Zig enum would make those illegal to represent. The real enums are one level up, in
+/// `src/types.zig`, tagged with this same integer.
+pub const c_enum = if (builtin.target.abi == .msvc) c_int else c_uint;
+
 /// The type of a parameter declared `va_list` in C.
 ///
 /// C's `va_list` names an *object* type, and the standard allows that object to be an

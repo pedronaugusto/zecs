@@ -8,6 +8,7 @@
 const std = @import("std");
 const options = @import("zecs_options");
 const core = @import("core.zig");
+const abi = @import("abi.zig");
 
 // Re-exported so a caller of this module sees one namespace rather than
 // having to know which area a shared declaration came from.
@@ -29,9 +30,10 @@ pub const ecs_world_t = core.ecs_world_t;
 
 pub extern const EcsQuantity: ecs_entity_t;
 
-/// One of the `Ecs*Type` constants. Declared as the integer the C enum compiles to, so
-/// that a value flecs invents at runtime is representable.
-pub const ecs_type_kind_t = c_uint;
+/// One of the `Ecs*Type` constants. Declared as the integer the C enum compiles to on
+/// this target — `abi.c_enum` — so that a value flecs invents at runtime is
+/// representable, on either Windows ABI.
+pub const ecs_type_kind_t = abi.c_enum;
 
 /// Added to every entity that has reflection data.
 pub const EcsType = extern struct {
@@ -136,7 +138,7 @@ pub const EcsUnitPrefix = extern struct {
 
 /// One of the `EcsOp*` constants. Declared as the integer the C enum compiles to, for the
 /// same reason as `ecs_type_kind_t`.
-pub const ecs_meta_op_kind_t = c_uint;
+pub const ecs_meta_op_kind_t = abi.c_enum;
 
 /// One instruction of a type's flattened serializer program, telling a serializer what
 /// is at which offset.
