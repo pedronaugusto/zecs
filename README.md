@@ -5,11 +5,10 @@
 > **What that badge does and does not say.** It reports the workflow in
 > [`.github/workflows/ci.yml`](.github/workflows/ci.yml), which describes runs on Linux,
 > macOS, Windows-gnu and Windows-MSVC. Executed by hand so far: the suite on Windows
-> x86_64, both the gnu and the MSVC ABI, plus the example consumer on both. Recorded
-> earlier for macOS/aarch64 and not re-verified since. Everything else in the matrix is
-> cross-compiled and has never been run. Wherever this file says "CI runs", read it as
-> "the workflow says", and read [Platform coverage](#platform-coverage) for what has
-> actually happened.
+> x86_64, both the gnu and the MSVC ABI, plus the example consumer on both. Every other
+> configuration in the matrix has been cross-compiled and linked, and never run. Wherever
+> this file says "CI runs", read it as "the workflow says", and read
+> [Platform coverage](#platform-coverage) for what has actually happened.
 
 This is [flecs](https://github.com/SanderMertens/flecs) — Sander Mertens's entity
 component system, version 4.1.6, vendored byte for byte — with a Zig API over it and no
