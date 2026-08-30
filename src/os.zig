@@ -1,4 +1,22 @@
-//! Routes flecs's allocations through a `std.mem.Allocator`.
+//! flecs's process-wide OS API, and the parts of it this package routes into Zig.
+//!
+//! flecs reaches the outside world through one struct of forty-odd function pointers.
+//! It is process-wide, it can be replaced exactly once, and this file is what replaces
+//! it — so this file is the only place any of those pointers can be routed from. Two
+//! owners of that struct would be two things that each believe they installed it.
+//!
+//! What is routed here, and what is deliberately left alone:
+//!
+//!   * **allocation** — the reason this seam exists, and the rest of this comment.
+//!   * **`log_`, `abort_`, and the two perf-trace hooks** — see "The rest of the OS
+//!     API" below. A host with its own logging, its own crash handling or its own
+//!     profiler has no other way to see what flecs is doing, and each of them defaults
+//!     to flecs's own behaviour until a handler is installed.
+//!   * **threads, mutexes, condition variables, the clock, `dlopen`, `fopen`** — left
+//!     to flecs's defaults, which its OS API implementation addon supplies on every
+//!     target this package supports. Routing those would mean reimplementing the
+//!     platform rather than observing flecs, and there is nothing here that could do it
+//!     better than the platform does.
 //!
 //! ## The shape of the seam
 //!
@@ -47,6 +65,10 @@
 
 const std = @import("std");
 const c = @import("c/os.zig");
+// The callback table itself is a linked symbol declared in the core module, and
+// `c/os.zig` cannot re-export it: a `pub const` alias of an `extern var` is a
+// compile-time constant where the ABI guard expects a symbol, and it says so.
+const core = @import("c/core.zig");
 const options = @import("zecs_options");
 const Error = @import("error.zig").Error;
 
@@ -87,7 +109,12 @@ var callbacks_installed: bool = false;
 
 /// Worlds alive right now, as far as this package can see. Worlds created through the
 /// raw C API are invisible here, so the allocation counters are consulted too.
-var worlds_alive: usize = 0;
+///
+/// Atomic because flecs is usable from more than one thread and nothing stops a host
+/// from creating and destroying worlds on two of them: a plain `+= 1` is a read, an
+/// add and a write, and two of those interleaved lose a world. Losing one here means
+/// `setAllocator` believes no world exists and swaps the allocator under a live one.
+var worlds_alive: std.atomic.Value(usize) = .init(0);
 
 /// Live bytes and blocks. Only maintained when `-Dtrack_allocations` is on, which
 /// defaults to Debug: in a release build these are not compiled at all, so the bridge
@@ -190,7 +217,7 @@ inline fn header(payload: [*]u8) *Header {
 /// blocks are outstanding, which is what makes a test suite able to use a checking
 /// allocator per test.
 pub fn setAllocator(gpa: std.mem.Allocator) Error!void {
-    if (worlds_alive != 0) return Error.WorldAlreadyExists;
+    if (worlds_alive.load(.acquire) != 0) return Error.WorldAlreadyExists;
 
     if (!callbacks_installed) {
         // flecs's own allocator having served anything means flecs has already run in
@@ -262,11 +289,173 @@ fn flecsAllocationCount() i64 {
 
 /// Called by `World` so the guard in `setAllocator` can see worlds this package made.
 pub fn noteWorldCreated() void {
-    worlds_alive += 1;
+    _ = worlds_alive.fetchAdd(1, .release);
 }
 
+/// The floor at zero is a compare-and-swap rather than a load and a subtract: a world
+/// destroyed on each of two threads would otherwise both read one, both subtract, and
+/// leave the count at the largest `usize` there is.
 pub fn noteWorldDestroyed() void {
-    if (worlds_alive != 0) worlds_alive -= 1;
+    var seen = worlds_alive.load(.monotonic);
+    while (seen != 0) {
+        seen = worlds_alive.cmpxchgWeak(seen, seen - 1, .release, .monotonic) orelse return;
+    }
+}
+
+//=============================================================================
+// The rest of the OS API
+//
+// Three hooks a host cannot reach any other way, installed the way flecs installs its
+// own: by writing the field of `ecs_os_api` rather than by handing over a new struct.
+// `ecs_os_set_api` takes effect exactly once (flecs.c:18686-18693), so after the
+// allocator is in place a whole-struct replacement is silently a no-op — which is why
+// `setAllocator` reads back what landed, and why these do not use that route at all.
+//
+// Order does not matter. Installed before the allocator, a handler survives, because
+// `setAllocator` copies the live struct before patching it; installed after, it is
+// written straight into the struct flecs is already calling.
+//=============================================================================
+
+/// What flecs installed, so that removing a handler puts its own behaviour back rather
+/// than leaving a null pointer where flecs expects something callable.
+var flecs_default: struct {
+    log: c.ecs_os_api_log_t = null,
+    abort: c.ecs_os_api_abort_t = null,
+    trace_push: c.ecs_os_api_perf_trace_t = null,
+    trace_pop: c.ecs_os_api_perf_trace_t = null,
+} = .{};
+var defaults_captured: bool = false;
+
+/// Fills in flecs's own callbacks if nothing has yet, and records them.
+///
+/// `ecs_os_set_api_defaults` returns immediately once the API is initialized
+/// (flecs.c:19203-19212), and does not lock it when it is not — with the OS API
+/// implementation addon compiled in it explicitly clears the initialized flag again
+/// (flecs.c:19247-19250). So this is safe to call at any point, including before
+/// `setAllocator`, which is what makes the order of the two irrelevant.
+fn captureDefaults() void {
+    if (defaults_captured) return;
+    c.ecs_os_set_api_defaults();
+    const api = c.ecs_os_get_api();
+    flecs_default = .{
+        .log = api.log_,
+        .abort = api.abort_,
+        .trace_push = api.perf_trace_push_,
+        .trace_pop = api.perf_trace_pop_,
+    };
+    defaults_captured = true;
+}
+
+/// How bad flecs thinks a message is. The numbers are flecs's own — `ecs_warn` is
+/// `ecs_log_(-2, …)` and `ecs_dbg_1` is `ecs_log_(1, …)`, libs/flecs/flecs.h:12846-12892
+/// — and the enum is open because `ecs_log_` takes an `int` and nothing stops a host
+/// from logging at a level of its own.
+pub const LogLevel = enum(i32) {
+    fatal = -4,
+    err = -3,
+    warning = -2,
+    trace = 0,
+    debug_1 = 1,
+    debug_2 = 2,
+    debug_3 = 3,
+    _,
+};
+
+/// Called for every line flecs would otherwise print itself. `file` is null for a
+/// message flecs did not attribute to a source location.
+pub const LogHandler = *const fn (
+    level: LogLevel,
+    file: ?[:0]const u8,
+    line: i32,
+    message: [:0]const u8,
+) void;
+
+/// Called instead of `abort()` when flecs has decided it cannot continue.
+///
+/// `noreturn`, and not by preference: flecs calls this from `ecs_abort_` and
+/// `ecs_throw_` at a point where it has already given up on the world's invariants,
+/// and its own default is libc's `abort`. A handler that returned would send flecs on
+/// through code it has just declared unreachable.
+pub const AbortHandler = *const fn () noreturn;
+
+/// Called around the spans flecs marks for a profiler. Both halves are given together,
+/// because a profiler that saw only one of them would be worse than one that saw
+/// neither. flecs installs no default for these, so with no handler they stay null and
+/// flecs skips them.
+pub const TraceHandler = struct {
+    push: *const fn (file: ?[:0]const u8, line: usize, name: ?[:0]const u8) void,
+    pop: *const fn (file: ?[:0]const u8, line: usize, name: ?[:0]const u8) void,
+};
+
+var log_handler: ?LogHandler = null;
+var abort_handler: ?AbortHandler = null;
+var trace_handler: ?TraceHandler = null;
+
+fn logThunk(
+    level: i32,
+    file: ?[*:0]const u8,
+    line: i32,
+    message: ?[*:0]const u8,
+) callconv(.c) void {
+    const handler = log_handler orelse return;
+    handler(
+        @enumFromInt(level),
+        if (file) |f| std.mem.span(f) else null,
+        line,
+        if (message) |m| std.mem.span(m) else "",
+    );
+}
+
+fn abortThunk() callconv(.c) void {
+    const handler = abort_handler orelse @panic("zecs: flecs aborted");
+    handler();
+}
+
+fn tracePushThunk(file: ?[*:0]const u8, line: usize, name: ?[*:0]const u8) callconv(.c) void {
+    const handler = trace_handler orelse return;
+    handler.push(
+        if (file) |f| std.mem.span(f) else null,
+        line,
+        if (name) |n| std.mem.span(n) else null,
+    );
+}
+
+fn tracePopThunk(file: ?[*:0]const u8, line: usize, name: ?[*:0]const u8) callconv(.c) void {
+    const handler = trace_handler orelse return;
+    handler.pop(
+        if (file) |f| std.mem.span(f) else null,
+        line,
+        if (name) |n| std.mem.span(n) else null,
+    );
+}
+
+/// Sends flecs's diagnostics to `handler` instead of to stderr. Null puts flecs's own
+/// implementation back.
+///
+/// This changes where the messages go, not which of them exist: the level flecs logs at
+/// is `zecs.c.log.ecs_log_set_level`.
+pub fn setLogHandler(handler: ?LogHandler) void {
+    captureDefaults();
+    log_handler = handler;
+    core.ecs_os_api.log_ = if (handler == null) flecs_default.log else &logThunk;
+}
+
+/// Replaces libc's `abort` for the paths where flecs gives up. Null puts it back.
+pub fn setAbortHandler(handler: ?AbortHandler) void {
+    captureDefaults();
+    abort_handler = handler;
+    core.ecs_os_api.abort_ = if (handler == null) flecs_default.abort else &abortThunk;
+}
+
+/// Routes flecs's profiler spans to `handler`. Null puts flecs's own back, which on
+/// every build of flecs 4.1.6 means none.
+pub fn setTraceHandler(handler: ?TraceHandler) void {
+    captureDefaults();
+    trace_handler = handler;
+    core.ecs_os_api.perf_trace_push_ =
+        if (handler == null) flecs_default.trace_push else &tracePushThunk;
+    core.ecs_os_api.perf_trace_pop_ =
+        if (handler == null) flecs_default.trace_pop else &tracePopThunk;
 }
 
 //=============================================================================
@@ -351,4 +540,81 @@ test "realloc of a null block allocates" {
 
     const block = reallocate(null, 128) orelse return error.AllocationFailed;
     release(block);
+}
+
+test "a log handler receives what flecs would have printed" {
+    const seen = struct {
+        var level: LogLevel = .trace;
+        var file: ?[:0]const u8 = null;
+        var line: i32 = 0;
+        var message: [:0]const u8 = "";
+        var calls: usize = 0;
+
+        fn handler(l: LogLevel, f: ?[:0]const u8, ln: i32, m: [:0]const u8) void {
+            level = l;
+            file = f;
+            line = ln;
+            message = m;
+            calls += 1;
+        }
+    };
+
+    setLogHandler(&seen.handler);
+    defer setLogHandler(null);
+
+    // Called through the field flecs itself calls, rather than through the thunk by
+    // name: what is being checked is that the pointer flecs holds is the one that
+    // reaches Zig, which is the half that can be wired up wrongly.
+    const installed_log = core.ecs_os_api.log_ orelse return error.LogNotInstalled;
+    installed_log(-2, "world.c", 42, "table not found");
+
+    try testing.expectEqual(@as(usize, 1), seen.calls);
+    try testing.expectEqual(LogLevel.warning, seen.level);
+    try testing.expectEqualStrings("world.c", seen.file orelse return error.NoFile);
+    try testing.expectEqual(@as(i32, 42), seen.line);
+    try testing.expectEqualStrings("table not found", seen.message);
+}
+
+test "removing a handler puts flecs's own behaviour back, not a null pointer" {
+    const noop = struct {
+        fn log(_: LogLevel, _: ?[:0]const u8, _: i32, _: [:0]const u8) void {}
+        fn abort() noreturn {
+            unreachable;
+        }
+    };
+
+    captureDefaults();
+    const original_log = core.ecs_os_api.log_;
+    const original_abort = core.ecs_os_api.abort_;
+
+    setLogHandler(&noop.log);
+    setAbortHandler(&noop.abort);
+    try testing.expect(core.ecs_os_api.log_ != original_log);
+    try testing.expect(core.ecs_os_api.abort_ != original_abort);
+
+    setLogHandler(null);
+    setAbortHandler(null);
+    try testing.expectEqual(original_log, core.ecs_os_api.log_);
+    try testing.expectEqual(original_abort, core.ecs_os_api.abort_);
+    // flecs calls both without checking. Whatever they are, they are not null.
+    try testing.expect(core.ecs_os_api.log_ != null);
+    try testing.expect(core.ecs_os_api.abort_ != null);
+}
+
+test "the world count does not wrap when it is decremented past zero" {
+    const before = worlds_alive.load(.monotonic);
+    defer worlds_alive.store(before, .monotonic);
+
+    worlds_alive.store(0, .monotonic);
+    noteWorldDestroyed();
+    try testing.expectEqual(@as(usize, 0), worlds_alive.load(.monotonic));
+
+    noteWorldCreated();
+    noteWorldCreated();
+    try testing.expectEqual(@as(usize, 2), worlds_alive.load(.monotonic));
+
+    noteWorldDestroyed();
+    noteWorldDestroyed();
+    noteWorldDestroyed();
+    try testing.expectEqual(@as(usize, 0), worlds_alive.load(.monotonic));
 }

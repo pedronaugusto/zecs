@@ -13,7 +13,7 @@
 const std = @import("std");
 const c = @import("c/entity.zig");
 const types = @import("types.zig");
-const memory = @import("memory.zig");
+const os = @import("os.zig");
 const component_mod = @import("component.zig");
 const iter_mod = @import("iter.zig");
 const query_mod = @import("query.zig");
@@ -59,7 +59,7 @@ pub const World = struct {
     /// returns an error.
     pub fn init() Error!World {
         const raw = c.ecs_init() orelse return Error.WorldInitFailed;
-        memory.noteWorldCreated();
+        os.noteWorldCreated();
         return .{ .raw = raw };
     }
 
@@ -67,14 +67,14 @@ pub const World = struct {
     /// reflection. Systems will not run from `progress`.
     pub fn initMinimal() Error!World {
         const raw = c.ecs_mini() orelse return Error.WorldInitFailed;
-        memory.noteWorldCreated();
+        os.noteWorldCreated();
         return .{ .raw = raw };
     }
 
     /// Destroys the world and everything in it.
     pub fn deinit(self: World) void {
         _ = c.ecs_fini(self.raw);
-        memory.noteWorldDestroyed();
+        os.noteWorldDestroyed();
     }
 
     //=========================================================================

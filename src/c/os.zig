@@ -10,8 +10,14 @@ const options = @import("zecs_options");
 const core = @import("core.zig");
 
 // Re-exported so a caller of this module sees one namespace rather than
-// having to know which area a shared declaration came from.
+// having to know which area a shared declaration came from. Types only: the
+// table itself, `core.ecs_os_api`, is a linked symbol, and a `pub const` alias
+// of one is a compile-time constant standing where the ABI guard expects an
+// `extern` — which it says so, at some length. Import `c/core.zig` for it.
+pub const ecs_os_api_abort_t = core.ecs_os_api_abort_t;
+pub const ecs_os_api_log_t = core.ecs_os_api_log_t;
 pub const ecs_os_api_malloc_t = core.ecs_os_api_malloc_t;
+pub const ecs_os_api_perf_trace_t = core.ecs_os_api_perf_trace_t;
 pub const ecs_os_api_t = core.ecs_os_api_t;
 pub const ecs_os_mutex_t = core.ecs_os_mutex_t;
 pub const ecs_os_thread_callback_t = core.ecs_os_thread_callback_t;

@@ -23,7 +23,7 @@ const Id = types.Id;
 /// `libs/flecs/flecs.c:44676`, and every other place a column is created or grown has
 /// the same shape — and neither `ecs_os_malloc` nor the block allocator behind it takes
 /// an alignment argument. What comes back is C's `malloc` guarantee, which is 16 bytes
-/// on every target this package builds for. `src/memory.zig` holds its own bridge to
+/// on every target this package builds for. `src/os.zig` holds its own bridge to
 /// exactly 16 so that installing a Zig allocator is not weaker than leaving libc's in
 /// place.
 ///
@@ -172,12 +172,12 @@ test "a type flecs can align is storable, and one it cannot is not" {
 
 test "the limit is the one the allocator bridge hands flecs" {
     // Two homes for one number would be the defect this package is most exposed to:
-    // `src/memory.zig` promises flecs a 16-byte payload and this file refuses anything
+    // `src/os.zig` promises flecs a 16-byte payload and this file refuses anything
     // that needs more, and if the two ever disagreed the refusal would be checking the
     // wrong bound. They are compared rather than kept in step by hand.
     try std.testing.expectEqual(
         @as(usize, max_alignment),
-        @import("memory.zig").payload_alignment.toByteUnits(),
+        @import("os.zig").payload_alignment.toByteUnits(),
     );
 }
 
