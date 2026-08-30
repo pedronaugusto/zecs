@@ -54,6 +54,15 @@ const todo = @import("abi_todo.zig");
 const tiers = @import("api_tiers.zig");
 
 const h = @cImport({
+    // MinGW turns on its fortified `wcscat`/`wcscpy` when `_FORTIFY_SOURCE` is set and
+    // the build is optimized, and Zig 0.16's translate-c renders those two bodies with
+    // a local that nothing uses — an error, in a file this package does not write. It
+    // reaches nothing about flecs: the fortified and plain declarations have the same
+    // ABI, and the guard compares flecs's own symbols. Undefined first because Zig
+    // passes `-D_FORTIFY_SOURCE` itself in release builds, and redefining it would be
+    // its own diagnostic.
+    @cUndef("_FORTIFY_SOURCE");
+    @cDefine("_FORTIFY_SOURCE", "0");
     @cInclude("flecs.h");
 });
 
