@@ -3656,7 +3656,14 @@ test "a handle no world minted belongs to every world" {
     try std.testing.expect(!other.minted(zecs.pairOf(pos, apples)));
 
     // flecs's process-global component ids belong to no world in particular.
-    try std.testing.expect(world.minted(zecs.app.restComponent()));
+    //
+    // Gated because `EcsRest`'s id is a symbol the rest addon defines, and an `inline`
+    // function that names it makes the whole test binary fail to LINK in a build without
+    // that addon — the branch being unreachable at runtime is not enough. A comptime
+    // condition prunes the reference instead.
+    if (comptime zecs.options.addon_rest) {
+        try std.testing.expect(world.minted(zecs.app.restComponent()));
+    }
 }
 
 test "a handle is accepted by a stage of the world that minted it" {
