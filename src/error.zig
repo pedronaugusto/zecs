@@ -34,6 +34,21 @@ pub const Error = error{
     /// `ecs_component_init` returned entity 0.
     ComponentInitFailed,
 
+    /// A component was asked to be copied into a second entity and cannot be. Its Zig
+    /// type has a `deinit` and no `dupe`, so this package has no way to produce a second
+    /// independent value — and flecs's own answer, a bitwise copy, would leave two owners
+    /// of one allocation with nothing to notice the second free. `World.notDuplicable`
+    /// names the component. Give the type a `dupe`, or keep it off prefabs and out of
+    /// `clone`.
+    ComponentNotDuplicable,
+
+    /// A component trait was changed after the component had been used. flecs caches a
+    /// trait as a flag on the component's record the first time the component is added
+    /// to anything, and refuses to change it afterwards — `flecs_register_flag_for_trait`,
+    /// `libs/flecs/flecs.c:4178`-`4187`, which aborts. Set the trait immediately after
+    /// registering the component.
+    ComponentInUse,
+
     /// `ecs_query_init` returned null. The usual cause is a malformed term.
     QueryInitFailed,
 
