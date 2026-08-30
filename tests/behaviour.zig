@@ -3703,3 +3703,183 @@ test "an iteration in progress notices that it has been copied" {
     // here ends up releasing the same iteration twice.
     copy.finished = true;
 }
+
+test "emplace hands back storage the caller constructs, and says whether it is new" {
+    try zecs.setAllocator(std.testing.allocator);
+    const world = try zecs.World.init();
+    defer world.deinit();
+
+    const position = try world.component(Position, .{});
+    const e = world.newEntity();
+
+    var is_new = false;
+    const first = world.emplace(e, position, &is_new);
+    try std.testing.expect(is_new);
+    // Uninitialised on the way in: this write is the construction, not an update.
+    first.* = .{ .x = 3, .y = 4 };
+
+    const second = world.emplace(e, position, &is_new);
+    try std.testing.expect(!is_new);
+    try std.testing.expectEqual(first, second);
+    try std.testing.expectEqual(@as(f32, 3), second.x);
+}
+
+test "count reports how many entities hold a component" {
+    try zecs.setAllocator(std.testing.allocator);
+    const world = try zecs.World.init();
+    defer world.deinit();
+
+    const health = try world.component(Health, .{});
+    const depth = try world.component(Depth, .{});
+    try std.testing.expectEqual(@as(i32, 0), world.count(health));
+
+    var last: zecs.Entity = 0;
+    for (0..7) |i| {
+        last = world.newEntity();
+        world.set(last, health, .{ .value = @intCast(i) });
+    }
+    try std.testing.expectEqual(@as(i32, 7), world.count(health));
+    try std.testing.expectEqual(@as(i32, 0), world.count(depth));
+
+    world.remove(last, health);
+    try std.testing.expectEqual(@as(i32, 6), world.count(health));
+    try std.testing.expectEqual(@as(i32, 6), world.countId(health.asId()));
+}
+
+test "a disabled entity keeps its components and is matched by no query" {
+    try zecs.setAllocator(std.testing.allocator);
+    const world = try zecs.World.init();
+    defer world.deinit();
+
+    const health = try world.component(Health, .{});
+    const kept = world.newEntity();
+    world.set(kept, health, .{ .value = 1 });
+    const hidden = world.newEntity();
+    world.set(hidden, health, .{ .value = 2 });
+
+    var query = try world.query(.{ .terms = &.{.{ .id = health.asId() }} });
+    defer query.deinit();
+
+    world.enable(hidden, false);
+    try std.testing.expectEqual(@as(usize, 1), matchCount(&query));
+
+    // Disabling took nothing away.
+    try std.testing.expect(world.has(hidden, health));
+    try std.testing.expectEqual(@as(i32, 2), world.get(hidden, health).?.value);
+
+    // `each` is not a query — it walks the component's tables directly, and the
+    // exclusion of `Disabled` is a term a query adds, so both entities are still there.
+    var raw: usize = 0;
+    var it = world.each(health);
+    defer it.deinit();
+    while (it.next()) |row| raw += row.count();
+    try std.testing.expectEqual(@as(usize, 2), raw);
+
+    world.enable(hidden, true);
+    try std.testing.expectEqual(@as(usize, 2), matchCount(&query));
+}
+
+test "a toggleable component stops matching without being removed" {
+    try zecs.setAllocator(std.testing.allocator);
+    const world = try zecs.World.init();
+    defer world.deinit();
+
+    const health = try world.component(Health, .{ .can_toggle = true });
+    const on = world.newEntity();
+    world.set(on, health, .{ .value = 1 });
+    const off = world.newEntity();
+    world.set(off, health, .{ .value = 2 });
+
+    try std.testing.expect(world.isEnabled(on, health));
+    world.enableComponent(off, health, false);
+    try std.testing.expect(!world.isEnabled(off, health));
+    try std.testing.expect(world.has(off, health));
+    try std.testing.expectEqual(@as(i32, 2), world.get(off, health).?.value);
+
+    var query = try world.query(.{ .terms = &.{.{ .id = health.asId() }} });
+    defer query.deinit();
+
+    var total: i32 = 0;
+    var it = query.iter();
+    defer it.deinit();
+    while (it.next()) |row| {
+        for (row.fieldSelf(Health, 0)) |h| total += h.value;
+    }
+    try std.testing.expectEqual(@as(i32, 1), total);
+
+    world.enableComponentId(off, health.asId(), true);
+    try std.testing.expect(world.isEnabledId(off, health.asId()));
+
+    // An entity without the component at all is not "enabled" for it.
+    try std.testing.expect(!world.isEnabled(world.newEntity(), health));
+}
+
+test "a singleton is one value, stored on the component's own entity" {
+    try zecs.setAllocator(std.testing.allocator);
+    const world = try zecs.World.init();
+    defer world.deinit();
+
+    const depth = try world.component(Depth, .{ .singleton = true });
+    try std.testing.expect(!world.singletonHas(depth));
+
+    world.singletonSet(depth, .{ .level = 3 });
+    try std.testing.expect(world.singletonHas(depth));
+    try std.testing.expectEqual(@as(i32, 3), world.singletonGet(depth).?.level);
+
+    // The store is not a special one: it is the component on its own entity.
+    try std.testing.expectEqual(@as(i32, 3), world.get(depth.id, depth).?.level);
+
+    world.singletonGetMut(depth).?.level = 4;
+    world.singletonModified(depth);
+    try std.testing.expectEqual(@as(i32, 4), world.singletonEnsure(depth).level);
+
+    world.singletonRemove(depth);
+    try std.testing.expect(!world.singletonHas(depth));
+
+    var is_new = false;
+    world.singletonEmplace(depth, &is_new).* = .{ .level = 5 };
+    try std.testing.expect(is_new);
+    try std.testing.expectEqual(@as(i32, 5), world.singletonGet(depth).?.level);
+}
+
+test "a singleton term reads the one value rather than matching per entity" {
+    try zecs.setAllocator(std.testing.allocator);
+    const world = try zecs.World.init();
+    defer world.deinit();
+
+    const position = try world.component(Position, .{});
+    const depth = try world.component(Depth, .{ .singleton = true });
+    world.singletonSet(depth, .{ .level = 9 });
+
+    for (0..4) |i| {
+        const e = world.newEntity();
+        world.set(e, position, .{ .x = @floatFromInt(i), .y = 0 });
+    }
+
+    var query = try world.query(.{ .terms = &.{
+        .{ .id = position.asId() },
+        .{ .id = depth.asId() },
+    } });
+    defer query.deinit();
+
+    var seen: usize = 0;
+    var levels: i32 = 0;
+    var it = query.iter();
+    defer it.deinit();
+    while (it.next()) |row| {
+        seen += row.count();
+        // One value shared by the whole row, not one per entity.
+        levels += row.fieldShared(Depth, 1).?.level;
+    }
+    try std.testing.expectEqual(@as(usize, 4), seen);
+    try std.testing.expectEqual(@as(i32, 9), levels);
+}
+
+/// How many entities a query matches, run from the top each time.
+fn matchCount(query: *zecs.Query) usize {
+    var seen: usize = 0;
+    var it = query.iter();
+    defer it.deinit();
+    while (it.next()) |row| seen += row.count();
+    return seen;
+}

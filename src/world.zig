@@ -97,20 +97,20 @@ pub const World = struct {
         return c.ecs_run(self.raw, target, delta_time, param);
     }
 
-    /// Spreads multi-threaded systems across `count` worker threads.
+    /// Spreads multi-threaded systems across `threads` worker threads.
     ///
     /// The threads come from flecs's OS API, so this needs the `os_api_impl` addon,
     /// which is in the default set. Systems only use them if they asked to with
     /// `SystemDesc.multi_threaded`.
     ///
     /// If an allocator was installed, it will be called from these threads.
-    pub fn setThreads(self: World, count: i32) void {
-        c.ecs_set_threads(self.raw, count);
+    pub fn setThreads(self: World, threads: i32) void {
+        c.ecs_set_threads(self.raw, threads);
     }
 
     /// Like `setThreads`, but the threads only exist while a frame is running.
-    pub fn setTaskThreads(self: World, count: i32) void {
-        c.ecs_set_task_threads(self.raw, count);
+    pub fn setTaskThreads(self: World, task_threads: i32) void {
+        c.ecs_set_task_threads(self.raw, task_threads);
     }
 
     pub fn setTargetFps(self: World, fps: c.ecs_ftime_t) void {
@@ -319,6 +319,8 @@ pub const World = struct {
         if (id == 0) return Error.ComponentInitFailed;
 
         if (desc.sparse) c.ecs_add_id(self.raw, id, types.Builtin.sparse.id());
+        if (desc.can_toggle) c.ecs_add_id(self.raw, id, types.Builtin.can_toggle.id());
+        if (desc.singleton) c.ecs_add_id(self.raw, id, types.Builtin.singleton.id());
 
         // Recorded on the component itself so that `clone` and `isA` can ask at runtime
         // what only the type knows at compile time. Only for the types that need it, so
@@ -383,22 +385,22 @@ pub const World = struct {
         return id;
     }
 
-    /// Creates `count` entities that all start with one id, in one table insertion.
+    /// Creates `n` entities that all start with one id, in one table insertion.
     ///
     /// The returned slice points into flecs's own storage: creating or deleting any
     /// entity invalidates it, and so does an observer that fires from this call. Copy
     /// it before doing either.
-    pub inline fn bulkNew(self: World, comp: anytype, count: i32) Error![]const Entity {
-        return self.bulkNewId(self.idOf(comp), count);
+    pub inline fn bulkNew(self: World, comp: anytype, n: i32) Error![]const Entity {
+        return self.bulkNewId(self.idOf(comp), n);
     }
 
     /// `bulkNew` for a tag, a pair, or an id built at runtime. A zero id creates
     /// entities with nothing on them.
-    pub fn bulkNewId(self: World, id: Id, count: i32) Error![]const Entity {
-        if (count <= 0) return &.{};
-        const first = c.ecs_bulk_new_w_id(self.raw, id, count) orelse return Error.BulkNewFailed;
+    pub fn bulkNewId(self: World, id: Id, n: i32) Error![]const Entity {
+        if (n <= 0) return &.{};
+        const first = c.ecs_bulk_new_w_id(self.raw, id, n) orelse return Error.BulkNewFailed;
         const array: [*]const Entity = @ptrCast(first);
-        return array[0..@intCast(count)];
+        return array[0..@intCast(n)];
     }
 
     /// Options for `bulkInit`.
@@ -434,7 +436,7 @@ pub const World = struct {
     /// was supplied.
     pub fn bulkInit(self: World, desc: BulkDesc) Error![]const Entity {
         if (desc.count <= 0) return &.{};
-        const count: usize = @intCast(desc.count);
+        const n: usize = @intCast(desc.count);
 
         var ids: [c.FLECS_ID_DESC_MAX]Id = undefined;
         // One slot is reserved for the terminating zero flecs reads the array up to.
@@ -446,7 +448,7 @@ pub const World = struct {
             if (values.len != desc.ids.len) return Error.BulkArrayMismatch;
         }
         if (desc.entities) |slots| {
-            if (slots.len < count) return Error.BulkArrayMismatch;
+            if (slots.len < n) return Error.BulkArrayMismatch;
         }
 
         const first = c.ecs_bulk_init(self.raw, &.{
@@ -457,7 +459,7 @@ pub const World = struct {
         }) orelse return Error.BulkNewFailed;
 
         const array: [*]const Entity = @ptrCast(first);
-        return array[0..count];
+        return array[0..n];
     }
 
     pub fn delete(self: World, e: Entity) void {
@@ -759,6 +761,40 @@ pub const World = struct {
         return @ptrCast(@alignCast(ptr));
     }
 
+    /// Adds a component without constructing it, so the caller can build the value in
+    /// place — the move `ensure` cannot express for a type that is expensive to
+    /// default-construct, or has no meaningful default at all.
+    ///
+    /// `is_new` is how the caller learns what it is holding, and it is not advisory.
+    /// When it comes back true the storage is uninitialised: the component's
+    /// constructor did NOT run, the bytes are whatever the table last had there, and
+    /// the caller must write a whole value before anything else — an observer, a
+    /// destructor, the next `get` — can see it. When it comes back false the entity
+    /// already had the component and the pointer is the existing value.
+    ///
+    /// Passing null asks flecs to assert that the component is new rather than to
+    /// report it, so null is for the case where the caller already knows.
+    pub inline fn emplace(
+        self: World,
+        e: Entity,
+        comp: anytype,
+        is_new: ?*bool,
+    ) *@TypeOf(comp).Type {
+        const T = @TypeOf(comp).Type;
+        const ptr = c.ecs_emplace_id(self.raw, e, self.idOf(comp), @sizeOf(T), is_new).?;
+        return @ptrCast(@alignCast(ptr));
+    }
+
+    pub inline fn emplaceId(
+        self: World,
+        e: Entity,
+        id: Id,
+        size: usize,
+        is_new: ?*bool,
+    ) ?*anyopaque {
+        return c.ecs_emplace_id(self.raw, e, id, size, is_new);
+    }
+
     /// Announces that a component was changed through `getMut` or `ensure`, so that
     /// `OnSet` observers run.
     pub inline fn modified(self: World, e: Entity, comp: anytype) void {
@@ -777,6 +813,116 @@ pub const World = struct {
     /// prefab or a parent.
     pub inline fn owns(self: World, e: Entity, comp: anytype) bool {
         return c.ecs_owns_id(self.raw, e, self.idOf(comp));
+    }
+
+    /// How many entities hold this component.
+    ///
+    /// A walk of every matching table, not a counter flecs keeps, so this is a
+    /// measurement rather than a lookup: fine for a check or a report, wrong in a loop.
+    pub inline fn count(self: World, comp: anytype) i32 {
+        return c.ecs_count_id(self.raw, self.idOf(comp));
+    }
+
+    pub inline fn countId(self: World, id: Id) i32 {
+        return c.ecs_count_id(self.raw, id);
+    }
+
+    //=========================================================================
+    // Switching things off without taking them away
+    //
+    // Two different mechanisms that share a word. An entity is disabled by giving it
+    // the `Disabled` tag, which no query matches unless it asks for it. A COMPONENT is
+    // disabled through a bitset the table keeps for it, which is why the component has
+    // to have been registered `.can_toggle = true` — flecs refuses the operation
+    // otherwise rather than silently doing nothing.
+    //
+    // Neither removes anything: the value is still there and comes back unchanged.
+    //=========================================================================
+
+    /// Enables or disables the entity, by adding or removing flecs's `Disabled` tag.
+    ///
+    /// A disabled entity is matched by no query and run by no system, unless the query
+    /// names `Disabled` itself. Moving it between tables, so it is not free on many
+    /// entities every frame.
+    ///
+    /// The exclusion is a term the query builder adds, so it belongs to queries and not
+    /// to the store: `each`, which walks a component's tables directly rather than
+    /// compiling a query, still visits a disabled entity. The tests measure both.
+    pub inline fn enable(self: World, e: Entity, enabled: bool) void {
+        c.ecs_enable(self.raw, e, enabled);
+    }
+
+    /// Enables or disables one component on one entity, leaving its value in place.
+    ///
+    /// Cheaper than adding and removing the component, because it is a bit rather than
+    /// a table move — which is the reason to reach for it. Requires the component to
+    /// have been registered with `.can_toggle = true`.
+    pub inline fn enableComponent(self: World, e: Entity, comp: anytype, enabled: bool) void {
+        c.ecs_enable_id(self.raw, e, self.idOf(comp), enabled);
+    }
+
+    pub inline fn enableComponentId(self: World, e: Entity, id: Id, enabled: bool) void {
+        c.ecs_enable_id(self.raw, e, id, enabled);
+    }
+
+    /// Whether the entity has the component AND it has not been switched off.
+    ///
+    /// False for an entity that does not have the component at all, so this is not the
+    /// negation of "disabled" — it is `has` and enabled together.
+    pub inline fn isEnabled(self: World, e: Entity, comp: anytype) bool {
+        return c.ecs_is_enabled_id(self.raw, e, self.idOf(comp));
+    }
+
+    pub inline fn isEnabledId(self: World, e: Entity, id: Id) bool {
+        return c.ecs_is_enabled_id(self.raw, e, id);
+    }
+
+    //=========================================================================
+    // Singletons
+    //
+    // flecs stores a singleton as an ordinary component on the component's own entity,
+    // and its C API spells that as a macro per operation (`ecs_singleton_get` and the
+    // rest, flecs.h:12038-12071). Zig has no macros, and `world.get(pos.id, pos)` is
+    // the kind of line that reads as a mistake, so the pattern is named here instead.
+    //
+    // Nothing about the storage is special — `.singleton = true` at registration is
+    // what makes a query term for the component resolve to this one value.
+    //=========================================================================
+
+    pub inline fn singletonAdd(self: World, comp: anytype) void {
+        self.add(comp.id, comp);
+    }
+
+    pub inline fn singletonRemove(self: World, comp: anytype) void {
+        self.remove(comp.id, comp);
+    }
+
+    pub inline fn singletonHas(self: World, comp: anytype) bool {
+        return self.has(comp.id, comp);
+    }
+
+    pub inline fn singletonGet(self: World, comp: anytype) ?*const @TypeOf(comp).Type {
+        return self.get(comp.id, comp);
+    }
+
+    pub inline fn singletonGetMut(self: World, comp: anytype) ?*@TypeOf(comp).Type {
+        return self.getMut(comp.id, comp);
+    }
+
+    pub inline fn singletonSet(self: World, comp: anytype, value: @TypeOf(comp).Type) void {
+        self.set(comp.id, comp, value);
+    }
+
+    pub inline fn singletonEnsure(self: World, comp: anytype) *@TypeOf(comp).Type {
+        return self.ensure(comp.id, comp);
+    }
+
+    pub inline fn singletonEmplace(self: World, comp: anytype, is_new: ?*bool) *@TypeOf(comp).Type {
+        return self.emplace(comp.id, comp, is_new);
+    }
+
+    pub inline fn singletonModified(self: World, comp: anytype) void {
+        self.modified(comp.id, comp);
     }
 
     //=========================================================================

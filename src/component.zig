@@ -111,6 +111,25 @@ pub const ComponentDesc = struct {
     /// what you want for something that changes on many entities every frame.
     sparse: bool = false,
 
+    /// Allow `World.enableComponent` to switch this component off on an entity without
+    /// removing it.
+    ///
+    /// Opt-in because it is not free: flecs keeps a bitset per table for a toggleable
+    /// component and consults it on every match. It is also not optional — flecs
+    /// refuses `ecs_enable_id` on a component without the trait rather than doing
+    /// nothing, so a component that is ever toggled has to be registered saying so.
+    can_toggle: bool = false,
+
+    /// Register this component as a singleton: one value, stored on the component
+    /// entity itself, which is what the `singleton*` operations on `World` reach.
+    ///
+    /// The trait is what makes a query term for this component resolve to that one
+    /// value rather than to a `$this` the query has to match. Without it the
+    /// `singleton*` operations still work — they are the same store — but a query
+    /// naming the component matches the component entity like any other entity, which
+    /// is almost never what a singleton is written for.
+    singleton: bool = false,
+
     /// Constructor, destructor and copy hooks.
     ///
     /// Null means the ones `typeHooks` derives from `T`, which is the empty set for
