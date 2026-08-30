@@ -523,6 +523,8 @@ const Coverage = struct {
     addon_absent: usize = 0,
     /// Listed in `abi_todo.zig`: exported, not bound yet.
     pending: usize = 0,
+    /// Listed in `abi_todo.zig` as declared by the header and defined by nothing.
+    not_defined: usize = 0,
 };
 
 const Kind = enum { function, variable };
@@ -557,6 +559,12 @@ fn coverOne(comptime kind: Kind, comptime name: []const u8, n: *Coverage) void {
             fail("`" ++ name ++ "` is listed in src/abi_todo.zig but src/c.zig declares " ++
                 "it. Delete the line: that list is what is left to bind, and an entry " ++
                 "that is already done makes it lie about how much is.");
+        }
+        if (isNotDefined(name)) {
+            fail("`" ++ name ++ "` is listed in src/abi_todo.zig as declared by flecs.h " ++
+                "and defined by nothing, and src/c.zig declares it anyway. An extern " ++
+                "with no definition links only for as long as nothing references it, " ++
+                "and the link test below references every one.");
         }
         // The name existing is not enough. flecs exports a function called
         // `ecs_id_is_pair` *and* defines a macro called `ECS_IS_PAIR`, and it would be
@@ -593,6 +601,10 @@ fn coverOne(comptime kind: Kind, comptime name: []const u8, n: *Coverage) void {
         n.declared += 1;
         return;
     }
+    if (isNotDefined(name)) {
+        n.not_defined += 1;
+        return;
+    }
     if (!@hasDecl(h, name)) {
         n.addon_absent += 1;
         return;
@@ -621,6 +633,17 @@ comptime {
                 "so an entry in the wrong place is an entry nothing checks. Sort it " ++
                 "byte-wise — uppercase before lowercase."),
         }
+    }
+}
+
+/// Linear, because `declared_but_not_defined` holds single figures — see its own
+/// comment for why it is not the sorted list next to it.
+fn isNotDefined(comptime name: []const u8) bool {
+    comptime {
+        for (todo.declared_but_not_defined) |n| {
+            if (std.mem.eql(u8, n, name)) return true;
+        }
+        return false;
     }
 }
 
@@ -690,7 +713,7 @@ test "ABI: src/c.zig covers what flecs exports" {
     // is off, or explicitly pending. There is no fourth outcome.
     try std.testing.expectEqual(
         manifest.functions.len + manifest.variables.len,
-        coverage.declared + coverage.addon_absent + coverage.pending,
+        coverage.declared + coverage.addon_absent + coverage.pending + coverage.not_defined,
     );
 
     // The claim this package makes about itself, stated as an assertion rather than a
@@ -698,9 +721,12 @@ test "ABI: src/c.zig covers what flecs exports" {
     if (comptime every_addon) {
         try std.testing.expectEqual(@as(usize, 0), coverage.addon_absent);
         try std.testing.expectEqual(@as(usize, 0), coverage.pending);
+        // Every entry of the header-declares-it-and-nothing-defines-it list is reached,
+        // so one that upstream fixes stops being a permanent exemption.
+        try std.testing.expectEqual(todo.declared_but_not_defined.len, coverage.not_defined);
         try std.testing.expectEqual(
             manifest.functions.len + manifest.variables.len,
-            coverage.declared,
+            coverage.declared + coverage.not_defined,
         );
     }
 }
@@ -748,13 +774,88 @@ test "ABI: a va_list crosses the ABI the way flecs.h passes one" {
                 ours.pointer.child,
                 them.pointer.child,
             ),
-            // Passed by value: every field has to line up, exactly as for any other
-            // struct that crosses.
-            .@"struct" => _ = checkStructLayout(what, Ours, Theirs),
+            // Passed by value. Compared field by POSITION rather than by name, which
+            // is the one place in this file that is right: the C compiler's
+            // `struct __va_list` has no member names translate-c can see, so it emits
+            // `unnamed_0`… and there is nothing to pair a name with. Offsets, widths
+            // and alignments are the whole content of the comparison here.
+            .@"struct" => {
+                const of = ours.@"struct".fields;
+                const tf = them.@"struct".fields;
+                if (of.len != tf.len) {
+                    fail(what ++ " has " ++ num(of.len) ++ " fields in src/c.zig but " ++
+                        num(tf.len) ++ " in flecs.h");
+                }
+                for (of, tf, 0..) |o, t, i| {
+                    if (@offsetOf(Ours, o.name) != @offsetOf(Theirs, t.name)) {
+                        fail(what ++ " field " ++ num(i) ++ " is at byte " ++
+                            num(@offsetOf(Ours, o.name)) ++ " in src/c.zig but " ++
+                            num(@offsetOf(Theirs, t.name)) ++ " in flecs.h");
+                    }
+                    sameScalar(what ++ " field " ++ num(i), o.type, t.type);
+                }
+            },
             else => fail(what ++ " is a " ++ @tagName(ours) ++ ", which this check does " ++
                 "not know how to compare"),
         }
     }
+}
+
+test "ABI: every extern this package declares resolves in the compiled library" {
+    // The two sweeps above compare `src/c.zig` against the *header*. A header can
+    // declare a symbol the library never defines, and no amount of comparing two
+    // declarations to each other will ever find that — flecs 4.1.6 does it once, and
+    // the only reason it was found is that one linker refused it while the others
+    // dropped the reference.
+    //
+    // What finds it deterministically is a relocation. This takes the address of every
+    // extern function and every extern variable in the package, so the test binary
+    // carries a reference to each and the linker has to resolve all of them or refuse
+    // to produce it. `src/abi_todo.zig`'s `declared_but_not_defined` is the list of the
+    // ones flecs's header promises and its source does not keep.
+    //
+    // Only with every addon on. A switched-off addon takes definitions out of the
+    // library while `c.zig` goes on declaring them, and an unused extern emits no
+    // relocation — which is precisely what makes a reduced addon set a legal
+    // configuration rather than a link failure. Forcing the relocation there would
+    // break that on purpose.
+    if (comptime !every_addon) return error.SkipZigTest;
+    @setEvalBranchQuota(2_000_000);
+
+    var sink: usize = 0;
+    var externs: usize = 0;
+    inline for (c.modules, 0..) |m, mi| {
+        inline for (@typeInfo(m).@"struct".decls) |d| {
+            const earlier = comptime blk: {
+                for (c.modules, 0..) |other, oi| {
+                    if (oi < mi and @hasDecl(other, d.name)) break :blk true;
+                }
+                break :blk false;
+            };
+            if (!earlier) {
+                const Decl = @TypeOf(@field(m, d.name));
+                if (Decl != type) {
+                    if (@typeInfo(Decl) == .@"fn") {
+                        const cc = @typeInfo(Decl).@"fn".calling_convention;
+                        if (cc != .@"inline" and cc != .auto) {
+                            sink +%= @intFromPtr(&@field(m, d.name));
+                            externs += 1;
+                        }
+                    } else if (!comptime isComptimeKnown(m, d.name)) {
+                        sink +%= @intFromPtr(&@field(m, d.name));
+                        externs += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Reaching here means the link succeeded, which is the whole assertion. These two
+    // are what stop a sweep that quietly stopped finding anything from looking the
+    // same: flecs 4.1.6 exports 710 functions and 318 variables, so the floor is set
+    // just under the sum.
+    try std.testing.expect(externs >= 1000);
+    try std.testing.expect(sink != 0);
 }
 
 test "ABI: the vendored flecs is the version UPSTREAM.md pins" {

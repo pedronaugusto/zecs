@@ -8,7 +8,9 @@
 #
 # The one difference from the hosted run: CI executes the suite on Linux, macOS and
 # Windows, whereas this executes it on whichever host you are on and cross-compiles the
-# rest.
+# rest. Cross-compiling here means compiling AND LINKING the Zig sources for the target,
+# not only the C library — see the cross-compilation section for why that distinction is
+# the whole point of the section.
 #
 # Usage:
 #   ci/run.sh            # the full matrix
@@ -193,24 +195,39 @@ section 'ABI guard — mutation test'
 section 'Cross-compilation'
 #-----------------------------------------------------------------------------
 
-  # Compile-only. These prove the sources and the build graph are portable; the tests
-  # above are what prove behaviour, on this host. CI executes the suite on Linux, macOS
-  # and Windows as well.
-  for target in \
-    x86_64-linux-gnu \
-    aarch64-linux-gnu \
-    x86_64-linux-musl \
-    aarch64-linux-musl \
-    x86_64-windows-gnu \
-    aarch64-windows-gnu \
-    x86_64-macos \
+  # Two steps per target, because they check different things and only one of them
+  # checks any Zig at all.
+  #
+  # `zig build` builds the flecs library and installs its header. `addModule` creates no
+  # artifact, so it analyses not one line of `src/` — a target where the sources do not
+  # compile passes it. `test-compile` builds both test binaries for the target: the ABI
+  # guard then runs against `@cImport` of the header as preprocessed FOR THAT TARGET,
+  # and the binaries are linked, which is what catches a symbol flecs's header declares
+  # and its source never defines.
+  cross_targets=(
+    x86_64-linux-gnu
+    aarch64-linux-gnu
+    x86_64-linux-musl
+    aarch64-linux-musl
+    x86_64-windows-gnu
+    aarch64-windows-gnu
+    x86_64-macos
     aarch64-macos
-  do
+  )
+  for target in "${cross_targets[@]}"; do
     run "build $target" zig build -Dtarget="$target"
+    run "compile $target" zig build test-compile -Daddons=everything -Dtarget="$target"
   done
 
-  # x86_64-windows-msvc is absent here because it needs the Microsoft standard library,
-  # which a non-Windows host does not have. CI covers it natively on a Windows runner.
+  # The MSVC ABI needs Microsoft's own standard library, so it is only reachable from a
+  # Windows host — where it is native, and the suite can be run rather than compiled.
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*|Windows_NT)
+      run 'MSVC ABI' zig build test -Dtarget=x86_64-windows-msvc
+      run 'MSVC ABI, every addon' zig build test -Daddons=everything -Dtarget=x86_64-windows-msvc
+      run 'example, MSVC ABI' sh -c 'cd examples/basic && zig build run -Dtarget=x86_64-windows-msvc'
+      ;;
+  esac
 fi
 
 #-----------------------------------------------------------------------------

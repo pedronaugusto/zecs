@@ -197,9 +197,30 @@ jobs:
         working-directory: examples/basic
       - run: zig build run -Doptimize=ReleaseFast
         working-directory: examples/basic
+      # Zig's default ABI for Windows is gnu, so the two steps above are the gnu arm
+      # everywhere. A consumer on Windows is as likely to be on the MSVC ABI, and the
+      # package's structs are laid out differently there.
+      - name: Consumer — Windows MSVC ABI
+        if: runner.os == 'Windows'
+        run: zig build run -Dtarget=x86_64-windows-msvc
+        working-directory: examples/basic
 
-  # Compile-only coverage of the targets the suite cannot execute on. These prove the
-  # sources and build graph are portable; the test job above is what proves behaviour.
+  # Compile-only coverage of the targets the suite cannot execute on.
+  #
+  # `zig build` alone does NOT do that. The default install step builds the flecs
+  # library and installs its header; `addModule` creates no artifact, so not one line
+  # of Zig is analysed and the job is green on a target where `src/` does not compile.
+  # That is not hypothetical: it is how a `@compileError` on x86_64 Windows and a
+  # va_list passed the wrong way on x86_64 System V both survived in a package with a
+  # cross-compilation tier.
+  #
+  # `test-compile` is what analyses the sources. It builds both test binaries for the
+  # target — which runs the ABI guard against `@cImport` of the header AS PREPROCESSED
+  # FOR THAT TARGET, so a type that is only correct on one ABI fails here — and it
+  # links them, which is what catches a symbol the header declares and the library
+  # never defines. `-Daddons=everything` because that is the only configuration whose
+  # header declares every symbol, and therefore the only one where the guard's coverage
+  # assertions are exact.
   cross-compile:
     name: cross (${{ matrix.target }})
     runs-on: ubuntu-latest
@@ -220,7 +241,27 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
-      - run: zig build -Dtarget=${{ matrix.target }}
+      - name: Library and install graph
+        run: zig build -Dtarget=${{ matrix.target }}
+      - name: Zig sources, ABI guard and link
+        run: zig build test-compile -Daddons=everything -Dtarget=${{ matrix.target }}
+
+  # The MSVC ABI is not in the matrix above because cross-compiling to it needs
+  # Microsoft's own standard library, which an Ubuntu runner does not have. It is
+  # covered on a Windows runner instead, and covered more strongly than the matrix
+  # covers anything: the `Test — Windows MSVC ABI` step in the test job EXECUTES the
+  # whole suite there. This job adds the widest addon set, where the guard's coverage
+  # assertions become exact — the configuration that found flecs's enums being `int`
+  # under MSVC and `unsigned int` everywhere else.
+  cross-msvc:
+    name: cross (x86_64-windows-msvc, every addon)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - run: zig build test -Daddons=everything -Dtarget=x86_64-windows-msvc
 
   # Proves libs/ is still a pristine copy of the pinned upstream commit, rather than a
   # claim in a markdown file. Needs network, so it is its own job and is not part of
