@@ -423,13 +423,20 @@ pub const QueryDesc = struct {
 };
 
 test "term defaults match a zeroed C term" {
+    // Field by field rather than byte by byte. `ecs_term_t` has a padding byte between
+    // `field_index` and `flags_`, and Zig promises nothing about the contents of
+    // padding in a struct literal: in Debug it happened to be zero, and in ReleaseFast
+    // it is whatever the stack held — this test read 0x7F there and failed. Padding is
+    // not part of the value, so comparing it was testing the compiler rather than the
+    // defaults.
+    //
+    // `inline for` over the C type's own fields, so a field added by a re-vendor is
+    // compared without this test being told about it.
     const zeroed = std.mem.zeroes(c.ecs_term_t);
     const built = (Term{}).toC();
-    try std.testing.expectEqualSlices(
-        u8,
-        std.mem.asBytes(&zeroed),
-        std.mem.asBytes(&built),
-    );
+    inline for (@typeInfo(c.ecs_term_t).@"struct".fields) |f| {
+        try std.testing.expectEqual(@field(zeroed, f.name), @field(built, f.name));
+    }
 }
 
 test "a query with too many terms is refused rather than truncated" {
