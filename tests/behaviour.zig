@@ -3501,6 +3501,45 @@ test "an error raised inside a module reaches the caller" {
     );
 }
 
+/// Fails the first time it is imported and succeeds afterwards, which is only a
+/// distinguishable outcome if a failed import is actually undone.
+var flaky_attempts: u32 = 0;
+
+const Flaky = struct {
+    pub fn import(world: zecs.World) zecs.Error!void {
+        flaky_attempts += 1;
+        _ = try world.entity(.{ .name = "Marker" });
+        if (flaky_attempts == 1) return zecs.Error.TooManyTerms;
+    }
+};
+
+test "a failed import leaves nothing behind, so importing again retries" {
+    if (comptime !zecs.options.addon_module) return error.SkipZigTest;
+
+    try zecs.setAllocator(std.testing.allocator);
+    const world = try zecs.World.init();
+    defer world.deinit();
+
+    flaky_attempts = 0;
+    try std.testing.expectError(zecs.Error.TooManyTerms, zecs.pipeline.import(world, Flaky));
+    try std.testing.expectEqual(@as(u32, 1), flaky_attempts);
+
+    // The module entity is gone, and so is what it created under its own scope.
+    try std.testing.expectEqual(@as(zecs.Entity, 0), world.lookupPath("flaky", .{}));
+    try std.testing.expectEqual(@as(zecs.Entity, 0), world.lookupPath("flaky.Marker", .{}));
+
+    // So this runs the body again rather than handing back a half-built module.
+    const id = try zecs.pipeline.import(world, Flaky);
+    try std.testing.expectEqual(@as(u32, 2), flaky_attempts);
+    try std.testing.expect(id != 0);
+    try std.testing.expectEqual(id, world.lookupPath("flaky", .{}));
+    try std.testing.expect(world.lookupPath("flaky.Marker", .{}) != 0);
+
+    // And a third import is the lookup it has always been.
+    try std.testing.expectEqual(id, try zecs.pipeline.import(world, Flaky));
+    try std.testing.expectEqual(@as(u32, 2), flaky_attempts);
+}
+
 var app_frames: u32 = 0;
 var app_init_ran = false;
 

@@ -198,9 +198,18 @@ pub fn phase(world: World, desc: PhaseDesc) Error!Entity {
 /// in a variable that outlives the world, and makes the second world revive the first
 /// one's id instead.
 ///
-/// An error from the import leaves the module entity behind, because flecs creates it
-/// before the module body runs. Importing again after a failure is therefore the same
-/// lookup as importing after a success, and will not retry.
+/// An import that fails leaves nothing behind. flecs creates the module entity before
+/// the module body runs, so a failure used to leave it there — and since importing is a
+/// lookup once the entity exists, importing again after a failure returned the id of a
+/// half-built module and never re-ran anything. A retry that quietly does nothing is
+/// worse than no retry. The entity is now deleted on the way out, which takes the
+/// components and systems the module created under its own scope with it, because
+/// flecs deletes an entity's children with it.
+///
+/// What a module deliberately created OUTSIDE its own scope survives, and cannot not:
+/// flecs has no transaction, and this package is not going to invent one by guessing
+/// what to undo. A module whose import can fail halfway should do its own tidying, and
+/// the entity going away is what gives it the chance.
 ///
 /// Needs the module addon.
 pub fn import(world: World, comptime M: type) Error!Entity {
@@ -212,10 +221,13 @@ pub fn import(world: World, comptime M: type) Error!Entity {
 
     const Thunk = struct {
         // flecs's import callback returns nothing, so an error raised by the module has
-        // to be carried out of band. One slot per module type, written and read either
-        // side of a synchronous call; importing is world setup, and flecs refuses it on
-        // a world that is being iterated.
-        var failure: ?Error = null;
+        // to be carried out of band, and `ecs_import` takes no context pointer to carry
+        // it in. One slot per module type per THREAD: the write and the read are either
+        // side of a synchronous call on one thread, so the only way to reach the slot
+        // twice at once is two threads setting up two worlds — which is legitimate, and
+        // which a process-wide slot silently got wrong. A module reaching its own slot
+        // reentrantly would be a module importing itself, which is a cycle.
+        threadlocal var failure: ?Error = null;
 
         fn call(raw: *c.ecs_world_t) callconv(.c) void {
             // What `ECS_MODULE` does, and in the order it does it: register the entity
@@ -240,7 +252,14 @@ pub fn import(world: World, comptime M: type) Error!Entity {
 
     Thunk.failure = null;
     const id = c.ecs_import(world.raw, &Thunk.call, name.ptr);
-    if (Thunk.failure) |err| return err;
+    if (Thunk.failure) |err| {
+        // Undone here rather than inside the thunk: `ecs_import` looks the name up
+        // again after calling it and `ecs_check`s that it found something
+        // (libs/flecs/flecs.c:27996), so deleting the entity before returning to flecs
+        // aborts the process in any build with checks on.
+        if (id != 0) c.ecs_delete(world.raw, id);
+        return err;
+    }
     if (id == 0) return Error.ModuleImportFailed;
     return id;
 }
