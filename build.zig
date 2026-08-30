@@ -1,5 +1,12 @@
 const std = @import("std");
 
+/// The package manifest, imported so the version has one home.
+///
+/// `zecs.version` used to be a second copy of the number in `build.zig.zon`, kept in
+/// step by remembering to. It is now derived: this build reads the manifest and passes
+/// the string through the options module, and `src/zecs.zig` parses it at compile time.
+const manifest = @import("build.zig.zon");
+
 //=============================================================================
 // Addons
 //=============================================================================
@@ -452,6 +459,9 @@ pub fn build(b: *std.Build) void {
     //-------------------------------------------------------------------------
 
     const options_step = b.addOptions();
+
+    // The package's own version, from the manifest rather than from a second literal.
+    options_step.addOption([]const u8, "version", manifest.version);
 
     // Layout-affecting constants. src/c.zig sizes its arrays from these, so a changed
     // constant moves both sides together and the ABI guard proves it landed.

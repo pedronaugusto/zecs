@@ -1,6 +1,15 @@
+// zecs — flecs 4.1.6, in Zig.
+//
+// The library is flecs, by Sander Mertens, vendored byte for byte under libs/flecs and
+// pinned by UPSTREAM.md. This package is the Zig API over it: the whole C ABI declared
+// and checked against the real header, and a typed layer on top. It is not a
+// reimplementation of an entity component system and does not contain one.
+//
+// Zig's package manifest has no `description` field — an unknown field here is accepted
+// and read by nothing — so this says it where a reader will actually see it.
 .{
     .name = .zecs,
-    .version = "0.1.0",
+    .version = "0.2.0",
     .minimum_zig_version = "0.16.0",
     .fingerprint = 0xec068ecdd3bee17e,
     .paths = .{
