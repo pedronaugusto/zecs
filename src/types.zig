@@ -76,7 +76,7 @@ pub const Oper = enum(i16) {
 
 /// Whether a query keeps a cache of the tables it matches. Caching costs memory and
 /// makes matching nearly free; uncached queries are cheap to create and slower to run.
-pub const CacheKind = enum(c_uint) {
+pub const CacheKind = enum(c.ecs_query_cache_kind_t) {
     /// Cached for queries owned by an entity (systems, observers), uncached otherwise.
     default = c.EcsQueryCacheDefault,
     /// Cache the terms that can be cached.

@@ -994,7 +994,9 @@ pub const ecs_equals_t = ?*const fn (a: ?*const anyopaque, b: ?*const anyopaque,
 
 pub const flecs_poly_dtor_t = ?*const fn (poly: ?*ecs_poly_t) callconv(.c) void;
 
-pub const ecs_inout_kind_t = c_uint;
+/// One of the `EcsInOut*` constants. Declared as the integer the C enum compiles to on
+/// this target — see `abi.c_enum`, which is why it is not written out here.
+pub const ecs_inout_kind_t = abi.c_enum;
 
 pub const EcsInOutDefault: i16 = 0;
 
@@ -1008,7 +1010,8 @@ pub const EcsIn: i16 = 4;
 
 pub const EcsOut: i16 = 5;
 
-pub const ecs_oper_kind_t = c_uint;
+/// One of the `EcsAnd`..`EcsNotFrom` constants. See `ecs_inout_kind_t`.
+pub const ecs_oper_kind_t = abi.c_enum;
 
 pub const EcsAnd: i16 = 0;
 
@@ -1024,10 +1027,11 @@ pub const EcsOrFrom: i16 = 5;
 
 pub const EcsNotFrom: i16 = 6;
 
-/// C spells this as an enum, so it compiles to an unsigned int and any value fits.
-/// Mirroring it as a Zig enum would make a value flecs invents later illegal to even
-/// represent; the raw layer stays an integer, and `zecs.CacheKind` is the real enum.
-pub const ecs_query_cache_kind_t = c_uint;
+/// C spells this as an enum, so it compiles to whichever `int` this target's C
+/// compiler gives one — `abi.c_enum` — and any value fits. Mirroring it as a Zig enum
+/// would make a value flecs invents later illegal to even represent; the raw layer
+/// stays an integer, and `zecs.CacheKind` is the real enum.
+pub const ecs_query_cache_kind_t = abi.c_enum;
 
 pub const EcsQueryCacheDefault: ecs_query_cache_kind_t = 0;
 
@@ -1871,7 +1875,8 @@ pub const ecs_http_key_value_t = extern struct {
     value: ?[*:0]const u8 = null,
 };
 
-pub const ecs_http_method_t = c_uint;
+/// One of the `EcsHttp*` constants. See `ecs_inout_kind_t`.
+pub const ecs_http_method_t = abi.c_enum;
 
 pub const ecs_http_request_t = extern struct {
     id: u64 = 0,
@@ -2589,8 +2594,8 @@ pub extern fn FlecsStatsImport(world: *ecs_world_t) void;
 pub extern fn ecs_ptr_to_json(world: *const ecs_world_t, @"type": ecs_entity_t, data: *const anyopaque) ?[*:0]u8;
 
 /// One of the `EcsBool`..`EcsId` constants. Declared as the integer the C enum compiles
-/// to, for the same reason as `ecs_type_kind_t`.
-pub const ecs_primitive_kind_t = c_uint;
+/// to on this target — `abi.c_enum` — for the same reason as `ecs_type_kind_t`.
+pub const ecs_primitive_kind_t = abi.c_enum;
 
 pub const ecs_member_value_range_t = extern struct {
     min: f64 = 0,
