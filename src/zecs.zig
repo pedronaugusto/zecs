@@ -321,14 +321,51 @@ pub const Version = struct {
     pub fn format(self: Version, writer: *std.Io.Writer) std.Io.Writer.Error!void {
         try writer.print("{d}.{d}.{d}", .{ self.major, self.minor, self.patch });
     }
+
+    /// Parses `major.minor.patch` at compile time.
+    ///
+    /// Deliberately unforgiving and deliberately comptime-only: its one caller is the
+    /// package's own version, which comes out of `build.zig.zon`, and a malformed
+    /// manifest should stop the build rather than produce a version that reads plausibly.
+    pub fn parse(comptime text: []const u8) Version {
+        comptime {
+            var parts = std.mem.splitScalar(u8, text, '.');
+            var parsed: [3]u32 = undefined;
+            for (&parsed) |*slot| {
+                const part = parts.next() orelse
+                    @compileError("version `" ++ text ++ "` has fewer than three parts");
+                slot.* = std.fmt.parseInt(u32, part, 10) catch
+                    @compileError("version `" ++ text ++ "` has a part that is not a number");
+            }
+            if (parts.next() != null) {
+                @compileError("version `" ++ text ++ "` has more than three parts");
+            }
+            return .{ .major = parsed[0], .minor = parsed[1], .patch = parsed[2] };
+        }
+    }
 };
 
 /// Version of these bindings.
-pub const version: Version = .{ .major = 0, .minor = 1, .patch = 0 };
+///
+/// Derived from `build.zig.zon` rather than written down a second time: `build.zig`
+/// imports the manifest and passes the string through the options module. A release
+/// therefore changes one line, and the number a consumer reads at runtime cannot drift
+/// from the number the package manager resolved.
+pub const version: Version = Version.parse(options.version);
 
 /// Version of the vendored flecs. Checked against `UPSTREAM.md` by the ABI test, and
 /// against the compiled header rather than written down twice.
 pub const flecs_version: Version = .{ .major = 4, .minor = 1, .patch = 6 };
+
+test "the package version is derived from the manifest, not restated" {
+    // Deliberately not a comparison against a literal `0.2.0` — that literal would be
+    // the second home this derivation exists to remove, and it would pass while saying
+    // nothing. What is checked is that the derivation is lossless: the string
+    // `build.zig` read out of `build.zig.zon` renders back to itself through the parse.
+    var buf: [64]u8 = undefined;
+    const rendered = try std.fmt.bufPrint(&buf, "{f}", .{version});
+    try std.testing.expectEqualStrings(options.version, rendered);
+}
 
 //=============================================================================
 // Tests
