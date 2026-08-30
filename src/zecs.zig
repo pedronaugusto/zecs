@@ -151,8 +151,10 @@ pub const LookupDesc = World.LookupDesc;
 pub const pairOf = world_mod.pairOf;
 pub const PairValue = world_mod.PairValue;
 
-/// flecs's component lifecycle hooks, derived from a Zig type. See `world.zig`.
-pub const typeHooks = world_mod.typeHooks;
+/// flecs's component lifecycle hooks, derived from a Zig type, and whether that type can
+/// be copied into a second entity at all. See `component.zig`.
+pub const typeHooks = component_mod.typeHooks;
+pub const duplicable = component_mod.duplicable;
 
 pub const Component = component_mod.Component;
 pub const ComponentDesc = component_mod.ComponentDesc;

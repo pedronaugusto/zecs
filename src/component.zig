@@ -96,11 +96,15 @@ pub const ComponentDesc = struct {
     /// what you want for something that changes on many entities every frame.
     sparse: bool = false,
 
-    /// Constructor, destructor, copy and move hooks. The default — none — is right for
-    /// plain data, which is memcpy-able and needs no lifecycle. A component owning a
-    /// slice, a file handle or an allocation needs them, and flecs will otherwise copy
-    /// it bitwise.
-    hooks: c.ecs_type_hooks_t = .{},
+    /// Constructor, destructor and copy hooks.
+    ///
+    /// Null means the ones `typeHooks` derives from `T`, which is the empty set for
+    /// plain data and a real lifecycle for a type with a `deinit`. It defaults to null
+    /// because the alternative default — none — meant that registering an owning
+    /// component the obvious way, `world.component(T, .{})`, silently leaked every value
+    /// ever put in it, and nothing said so. Pass `.{}` to register a type with no hooks
+    /// deliberately, or a hand-written set to override the derivation.
+    hooks: ?c.ecs_type_hooks_t = null,
 };
 
 /// Builds the C descriptor for registering `T`. Kept separate from `World` so the
@@ -117,7 +121,7 @@ pub fn describe(comptime T: type, desc: ComponentDesc) c.ecs_component_desc_t {
         .type = .{
             .size = size,
             .alignment = alignment,
-            .hooks = desc.hooks,
+            .hooks = desc.hooks orelse typeHooks(T),
             .component = 0,
             .name = null,
         },
@@ -175,4 +179,250 @@ test "the limit is the one the allocator bridge hands flecs" {
         @as(usize, max_alignment),
         @import("memory.zig").payload_alignment.toByteUnits(),
     );
+}
+
+//=============================================================================
+// Component lifecycle hooks, derived from the Zig type
+//
+// flecs asks for eight function pointers to describe how a component is constructed,
+// destroyed, copied and moved. Zig answers most of that by itself, so most of the eight
+// should stay null, and getting which ones right is the whole content of this section.
+//
+// Relocation first, because it is the one flecs cannot guess. A Zig value has no move
+// constructor and no identity: relocating it is a memcpy, and the source is not left
+// needing anything. That is exactly what flecs does when `move` is null — it memcpys
+// into the destination and does not destruct the source — so a Zig type wants no move
+// hook at all. Setting one would be worse than useless: flecs would then treat the move
+// as non-trivial and destruct the source after every table change, freeing what the
+// destination now owns.
+//
+// Copying is where Zig runs out of answers, and where this package used to get it wrong.
+// flecs has two copy hooks and uses them for two things a Zig type cannot tell apart:
+//
+//   `copy`      copy-assign over a live value — what `set` does on a component the
+//               entity already has;
+//   `copy_ctor` copy into uninitialised memory — what `set` does when it also adds the
+//               component, what a DEFERRED `set` does into the command buffer, and what
+//               `ecs_clone` and prefab instantiation do into a second entity.
+//
+// The first three of those hand a value over: the source is a temporary the caller has
+// finished with. The last two duplicate: the source stays alive and owned by somebody
+// else. Zig has no copy constructor to derive the second from, and flecs calls the same
+// pointer for both, so the type has to say which world it lives in — and this package
+// has to stop the one it cannot express from happening quietly.
+//
+//   * A type with `dupe` lives by VALUE. Both hooks duplicate, `set` leaves the caller
+//     owning what it passed, and cloning and prefabs work.
+//   * A type with `deinit` and no `dupe` is HANDED OVER. Both hooks take the source's
+//     bits, `set` gives the value to the world, and duplication is not expressible —
+//     so `World.component` marks the component and `World.clone` and prefab
+//     instantiation refuse it by name instead of producing two owners of one
+//     allocation.
+//
+// Plain data is neither: with no `deinit` there is nothing to own, a memcpy IS a
+// duplicate, and flecs's own empty hook set is already correct.
+//=============================================================================
+
+/// flecs's lifecycle hooks for `T`, worked out at compile time.
+///
+/// A plain-data component gets nothing — the empty hook set, which is what flecs assumes
+/// anyway — so this costs nothing to apply to a type that does not need it. It is what
+/// `ComponentDesc.hooks` applies by default, so a component with a `deinit` is given its
+/// destructor by registration rather than by the caller remembering to ask.
+///
+/// A component with a `deinit` gets:
+///
+/// - a destructor that calls it, so removing the component, deleting the entity or
+///   destroying the world releases what the value owns;
+/// - a constructor, when every field of `T` has a default, so a value flecs creates on
+///   its own is `T{}` rather than zeroes. Without one, flecs zeroes the memory;
+/// - a copy and a copy-construct, which destroy what the destination held before taking
+///   the source. Setting a component twice therefore frees the first value instead of
+///   leaking it.
+///
+/// Which puts one requirement on the type: `deinit` has to be safe to call on a value
+/// flecs constructed and nothing has been written to yet — `T{}`, or all zeroes when
+/// there is no `T{}` to write. That value is what the copy destroys before it takes the
+/// first value a component is ever set to.
+///
+/// **Adding `dupe` changes what `set` means.** `pub fn dupe(self: T) T` returns an
+/// independent copy — a new allocation holding the same contents. With it, both copy
+/// hooks duplicate: the world gets its own value and the caller keeps ownership of the
+/// one it passed, so `world.set(e, comp, mine)` leaves `mine` for the caller to
+/// `deinit`. Without it, `set` hands the value over and the caller must not touch it
+/// again. Both are coherent; the type picks one, and `duplicable` reports which.
+///
+/// `deinit` must take exactly one parameter, the value, and `dupe` exactly one and
+/// return `T`. A `deinit` that also wants an allocator — `std.ArrayList`'s, among
+/// others — cannot be called from a flecs hook, which is handed nothing but the pointer,
+/// so that is a compile error here rather than a surprise later. Wrap such a type in one
+/// that remembers its allocator.
+pub fn typeHooks(comptime T: type) c.ecs_type_hooks_t {
+    // flecs refuses hooks on a zero-sized component, and there is nothing for them to
+    // act on anyway.
+    if (comptime @sizeOf(T) == 0) return .{};
+    if (comptime !hasDeinit(T)) return .{};
+
+    const thunks = Thunks(T);
+    return .{
+        .ctor = if (comptime hasDefaultValue(T)) &thunks.ctor else null,
+        .dtor = &thunks.dtor,
+        .copy = &thunks.copy,
+        // Set explicitly rather than left for flecs to synthesise. flecs's default
+        // copy-construct is "run ctor, then run copy" — `flecs_default_copy_ctor`,
+        // libs/flecs/flecs.c:21498-21501 — which for the handed-over regime means a
+        // fresh value is destroyed and then the source's bits are taken: the same double
+        // ownership, arrived at by a longer route. Naming it here is what puts the regime
+        // in one place.
+        .copy_ctor = &thunks.copyCtor,
+    };
+}
+
+/// Whether a value of `T` can be duplicated — copied into a second entity while the
+/// first keeps its own.
+///
+/// True for plain data, whose bits ARE the value, and for a type with `dupe`. False for
+/// a type that owns something and has not said how to copy it; `World.clone` and prefab
+/// instantiation refuse those, because the alternative is two owners of one allocation
+/// and nothing that can tell you.
+pub fn duplicable(comptime T: type) bool {
+    return @sizeOf(T) == 0 or !hasDeinit(T) or hasDupe(T);
+}
+
+/// The C-ABI functions flecs holds for `T`. Generated per type at compile time, so each
+/// one is an ordinary loop over a typed slice rather than a walk through a `void*`.
+fn Thunks(comptime T: type) type {
+    return struct {
+        fn ctor(ptr: ?*anyopaque, count: i32, _: ?*const c.ecs_type_info_t) callconv(.c) void {
+            for (slice(ptr, count)) |*value| value.* = .{};
+        }
+
+        fn dtor(ptr: ?*anyopaque, count: i32, _: ?*const c.ecs_type_info_t) callconv(.c) void {
+            for (slice(ptr, count)) |*value| value.deinit();
+        }
+
+        fn copy(
+            dst: ?*anyopaque,
+            src: ?*const anyopaque,
+            count: i32,
+            _: ?*const c.ecs_type_info_t,
+        ) callconv(.c) void {
+            const from: [*]const T = @ptrCast(@alignCast(src.?));
+            for (slice(dst, count), from[0..@intCast(count)]) |*to, *value| {
+                // The destination is a live component. flecs's own default here is a
+                // memcpy over it, which would strand whatever it owned.
+                to.deinit();
+                to.* = take(value);
+            }
+        }
+
+        fn copyCtor(
+            dst: ?*anyopaque,
+            src: ?*const anyopaque,
+            count: i32,
+            _: ?*const c.ecs_type_info_t,
+        ) callconv(.c) void {
+            const from: [*]const T = @ptrCast(@alignCast(src.?));
+            // The destination is uninitialised, so there is nothing to destroy first.
+            for (slice(dst, count), from[0..@intCast(count)]) |*to, *value| {
+                to.* = take(value);
+            }
+        }
+
+        /// One source value, as the type's regime says to take it.
+        inline fn take(value: *const T) T {
+            return if (comptime hasDupe(T)) value.dupe() else value.*;
+        }
+
+        inline fn slice(ptr: ?*anyopaque, count: i32) []T {
+            const typed: [*]T = @ptrCast(@alignCast(ptr.?));
+            return typed[0..@intCast(count)];
+        }
+    };
+}
+
+fn hasDeinit(comptime T: type) bool {
+    switch (@typeInfo(T)) {
+        .@"struct", .@"union", .@"enum" => {},
+        else => return false,
+    }
+    if (!@hasDecl(T, "deinit")) return false;
+    const Deinit = @TypeOf(@field(T, "deinit"));
+    if (@typeInfo(Deinit) != .@"fn") return false;
+    if (@typeInfo(Deinit).@"fn".params.len != 1) @compileError(
+        "zecs cannot derive a destructor for " ++ @typeName(T) ++ ": its `deinit` takes " ++
+            "more than the value, and a flecs hook is handed nothing else. Wrap the type " ++
+            "in one whose `deinit` needs no arguments, or write the hooks by hand.",
+    );
+    return true;
+}
+
+/// Whether `T` says how to duplicate itself: `pub fn dupe(self: T) T`, or the same taking
+/// a pointer.
+fn hasDupe(comptime T: type) bool {
+    switch (@typeInfo(T)) {
+        .@"struct", .@"union", .@"enum" => {},
+        else => return false,
+    }
+    if (!@hasDecl(T, "dupe")) return false;
+    const Dupe = @TypeOf(@field(T, "dupe"));
+    if (@typeInfo(Dupe) != .@"fn") return false;
+    const info = @typeInfo(Dupe).@"fn";
+    if (info.params.len != 1 or info.return_type != T) @compileError(
+        "zecs cannot derive a copy for " ++ @typeName(T) ++ ": `dupe` has to take the " ++
+            "value and nothing else and return " ++ @typeName(T) ++ ", an independent " ++
+            "copy the destination will own. A `dupe` that can fail, or that needs an " ++
+            "allocator handed to it, cannot be called from a flecs hook — it is given " ++
+            "nothing but the two pointers. Wrap the type in one that remembers what it " ++
+            "needs.",
+    );
+    return true;
+}
+
+/// Whether `T{}` is a value: every field has a default, so flecs can construct one
+/// without being told anything.
+fn hasDefaultValue(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .@"struct" => |info| for (info.fields) |field| {
+            if (field.default_value_ptr == null) break false;
+        } else true,
+        else => false,
+    };
+}
+
+test "what a type can promise decides which hooks it gets" {
+    const Plain = struct { x: f32 };
+    try std.testing.expect(duplicable(Plain));
+    try std.testing.expect(typeHooks(Plain).dtor == null);
+    try std.testing.expect(typeHooks(Plain).copy_ctor == null);
+
+    // Owns something and cannot say how to copy it: handed over, and not duplicable.
+    const HandedOver = struct {
+        n: u32 = 0,
+        pub fn deinit(self: *@This()) void {
+            self.n = 0;
+        }
+    };
+    try std.testing.expect(!duplicable(HandedOver));
+    try std.testing.expect(typeHooks(HandedOver).dtor != null);
+    try std.testing.expect(typeHooks(HandedOver).copy_ctor != null);
+
+    // Says how to copy itself: lives by value, and may be cloned.
+    const ByValue = struct {
+        n: u32 = 0,
+        pub fn deinit(self: *@This()) void {
+            self.n = 0;
+        }
+        pub fn dupe(self: @This()) @This() {
+            return .{ .n = self.n };
+        }
+    };
+    try std.testing.expect(duplicable(ByValue));
+    try std.testing.expect(typeHooks(ByValue).dtor != null);
+    try std.testing.expect(typeHooks(ByValue).copy_ctor != null);
+
+    // A tag has no storage for a hook to act on, and flecs refuses hooks on one.
+    const Tag = struct {};
+    try std.testing.expect(duplicable(Tag));
+    try std.testing.expect(typeHooks(Tag).dtor == null);
 }

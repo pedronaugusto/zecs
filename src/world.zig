@@ -317,6 +317,13 @@ pub const World = struct {
 
         if (desc.sparse) c.ecs_add_id(self.raw, id, types.Builtin.sparse.id());
 
+        // Recorded on the component itself so that `clone` and `isA` can ask at runtime
+        // what only the type knows at compile time. Only for the types that need it, so
+        // a world full of plain data never creates the marker at all.
+        if (comptime !component_mod.duplicable(T)) {
+            c.ecs_add_id(self.raw, id, try self.entity(.{ .name = not_duplicable }));
+        }
+
         return .{ .id = id };
     }
 
@@ -327,7 +334,7 @@ pub const World = struct {
     /// been added to anything yet, and registration is the only moment that is
     /// guaranteed to be true of.
     pub inline fn setHooks(self: World, comp: anytype) void {
-        const derived = typeHooks(@TypeOf(comp).Type);
+        const derived = component_mod.typeHooks(@TypeOf(comp).Type);
         c.ecs_set_hooks_id(self.raw, comp.asId(), &derived);
     }
 
@@ -466,8 +473,16 @@ pub const World = struct {
         return c.ecs_is_alive(self.raw, e);
     }
 
+    /// Finds an entity by the name it was created with, or 0.
+    ///
+    /// Taken LITERALLY, dots and all — the same way `entity` and `component` write a
+    /// name. `ecs_lookup` reads its argument as a path separated by `.`, so
+    /// `lookup(@typeName(T))` through it never found the component `component(T, .{})`
+    /// had just registered: one half of the package created `main.Position` as a name
+    /// and the other half asked for a `Position` inside a scope called `main`. A name
+    /// that really is a path is `lookupPath`, which takes the separator.
     pub fn lookup(self: World, path: [:0]const u8) Entity {
-        return c.ecs_lookup(self.raw, path.ptr);
+        return c.ecs_lookup_path_w_sep(self.raw, 0, path.ptr, "", null, true);
     }
 
     pub fn getName(self: World, e: Entity) ?[:0]const u8 {
@@ -722,6 +737,148 @@ pub const World = struct {
     }
 
     //=========================================================================
+    // Duplication
+    //
+    // flecs copies a component from one entity into another in two places: `ecs_clone`,
+    // and the override an instance gets when it is made an instance of a prefab. For
+    // plain data that is a memcpy and it is right. For a component that owns an
+    // allocation and has not said how to copy it, it is two owners of one block — and
+    // the second free is a crash somewhere else, at a time with nothing to do with the
+    // clone.
+    //
+    // `component.duplicable` settles the question at compile time, from the type.
+    // Registration records the answer on the component entity, which is what lets the
+    // two operations below ask it at the moment they would otherwise get it wrong.
+    //=========================================================================
+
+    /// The tag `component` puts on a component whose values cannot be duplicated.
+    ///
+    /// An ordinary named entity, so the marking is visible in `typeStr` and in the
+    /// Explorer alongside everything else flecs knows about the component, rather than
+    /// living in a side table this package would have to keep in step.
+    pub const not_duplicable = "zecs.NotDuplicable";
+
+    /// The marker entity for this world. Zero when nothing in this world has ever needed
+    /// it, which is the common case and is why every check starts by asking.
+    fn notDuplicableTag(self: World) Entity {
+        return self.lookup(not_duplicable);
+    }
+
+    /// The first component of `e` that cannot be duplicated, or zero. `overrides_only`
+    /// restricts the walk to the components an INSTANCE would be given a copy of:
+    /// flecs's default for a component is `(OnInstantiate, Override)`, and one marked
+    /// `Inherit` or `DontInherit` is never copied, so it cannot double-own.
+    fn firstNotDuplicable(self: World, e: Entity, overrides_only: bool) Entity {
+        const tag = self.notDuplicableTag();
+        if (tag == 0) return 0;
+        const on_instantiate = types.Builtin.on_instantiate.id();
+        for (self.typeOf(e)) |id| {
+            const component_id = c.ecs_get_typeid(self.raw, id);
+            if (component_id == 0) continue;
+            if (!c.ecs_has_id(self.raw, component_id, tag)) continue;
+            if (overrides_only) {
+                const trait = c.ecs_get_target(self.raw, component_id, on_instantiate, 0);
+                if (trait == types.Builtin.inherit.id()) continue;
+                if (trait == types.Builtin.dont_inherit.id()) continue;
+            }
+            return component_id;
+        }
+        return 0;
+    }
+
+    /// Copies an entity, with its components.
+    ///
+    /// `copy_value` false gives the destination the same component SET with freshly
+    /// constructed values. True copies the values, which is the operation a component
+    /// with a `deinit` and no `dupe` cannot survive — so it is refused with
+    /// `Error.ComponentNotDuplicable` instead of performed. `notDuplicable` names the
+    /// component that caused the refusal.
+    ///
+    /// `dst` zero creates the destination entity.
+    pub fn clone(self: World, dst: Entity, src: Entity, copy_value: bool) Error!Entity {
+        if (copy_value and self.firstNotDuplicable(src, false) != 0) {
+            return Error.ComponentNotDuplicable;
+        }
+        const made = c.ecs_clone(self.raw, dst, src, copy_value);
+        if (made == 0) return Error.EntityInitFailed;
+        return made;
+    }
+
+    /// Makes `e` an instance of `base`: it inherits `base`'s components, and is given
+    /// its own copy of the ones `base` marks for overriding — which is every component
+    /// by default.
+    ///
+    /// The typed spelling of `add(e, pairOf(Builtin.is_a, base))`, and the place the
+    /// duplication question is asked before flecs answers it wrongly. Refuses with
+    /// `Error.ComponentNotDuplicable` when the base carries a component that would be
+    /// copied and cannot be.
+    pub fn isA(self: World, e: Entity, base: Entity) Error!void {
+        if (self.firstNotDuplicable(base, true) != 0) return Error.ComponentNotDuplicable;
+        c.ecs_add_id(self.raw, e, types.pair(types.Builtin.is_a.id(), base));
+    }
+
+    /// The first component of `e` that cannot be duplicated, or zero — the component
+    /// `clone` refused over, and the answer to "why did that fail".
+    pub fn notDuplicable(self: World, e: Entity) Entity {
+        return self.firstNotDuplicable(e, false);
+    }
+
+    /// Creates a prefab: an entity flecs leaves out of every query, kept to be
+    /// instantiated with `isA`.
+    pub fn prefab(self: World, name: ?[:0]const u8) Error!Entity {
+        const e = try self.entity(.{ .name = name });
+        c.ecs_add_id(self.raw, e, types.Builtin.prefab.id());
+        return e;
+    }
+
+    /// Marks a component so that an instance of a prefab carrying it gets its OWN copy
+    /// rather than reading the prefab's — flecs's `(OnInstantiate, Override)`, which is
+    /// already the default, so this is for undoing `inheritOnInstantiate`.
+    pub fn overrideOnInstantiate(self: World, comp: anytype) Error!void {
+        return self.setOnInstantiate(comp, types.Builtin.override.id());
+    }
+
+    /// Marks a component so that instances SHARE the prefab's value rather than copying
+    /// it. One value behind however many instances, and a term matching it resolves
+    /// through `Up` — which is why `Iter.field` sizes such a field to one element.
+    ///
+    /// Also the way to put an uncopyable component on a prefab: an inherited component
+    /// is never duplicated, so `isA` allows it.
+    pub fn inheritOnInstantiate(self: World, comp: anytype) Error!void {
+        return self.setOnInstantiate(comp, types.Builtin.inherit.id());
+    }
+
+    /// Marks a component so that instances neither copy nor see it.
+    pub fn dontInheritOnInstantiate(self: World, comp: anytype) Error!void {
+        return self.setOnInstantiate(comp, types.Builtin.dont_inherit.id());
+    }
+
+    /// Sets the `(OnInstantiate, *)` trait, which flecs will only accept before the
+    /// component has been used.
+    ///
+    /// flecs caches the trait as a flag on the component's record the first time the
+    /// component is added to anything, and ABORTS on a later change
+    /// [read-from-source: `flecs_register_flag_for_trait`, `libs/flecs/flecs.c:4178`-`4187`].
+    /// The same two questions it asks are asked here first, so a caller gets
+    /// `Error.ComponentInUse` where flecs would have taken the process down.
+    fn setOnInstantiate(self: World, comp: anytype, trait: Entity) Error!void {
+        const id = comp.asId();
+        const wildcard = types.Builtin.wildcard.id();
+        if (c.ecs_id_in_use(self.raw, id) or
+            c.ecs_id_in_use(self.raw, types.pair(id, wildcard)))
+        {
+            return Error.ComponentInUse;
+        }
+        // `OnInstantiate` is exclusive, so flecs replaces the existing target rather
+        // than leaving two.
+        c.ecs_add_id(
+            self.raw,
+            id,
+            types.pair(types.Builtin.on_instantiate.id(), trait),
+        );
+    }
+
+    //=========================================================================
     // Queries, systems, observers
     //=========================================================================
 
@@ -899,133 +1056,6 @@ inline fn pairElement(value: anytype) Entity {
 fn isComponentHandle(comptime T: type) bool {
     return switch (@typeInfo(T)) {
         .@"struct" => @hasDecl(T, "Type") and @hasDecl(T, "asId"),
-        else => false,
-    };
-}
-
-//=============================================================================
-// Component lifecycle hooks, derived from the Zig type
-//
-// flecs asks for eight function pointers to describe how a component is constructed,
-// destroyed, copied and moved. Zig answers most of that by itself, so most of the eight
-// should stay null, and getting which ones right is the whole content of this section.
-//
-// Relocation first, because it is the one flecs cannot guess. A Zig value has no move
-// constructor and no identity: relocating it is a memcpy, and the source is not left
-// needing anything. That is exactly what flecs does when `move` is null — it memcpys
-// into the destination and does not destruct the source — so a Zig type wants no move
-// hook at all. Setting one would be worse than useless: flecs would then treat the move
-// as non-trivial and destruct the source after every table change, freeing what the
-// destination now owns.
-//
-// Copying is the opposite case: Zig has no copy constructor either, so there is nothing
-// to derive. A bitwise copy of a value that owns memory produces two owners. flecs uses
-// the copy hook for two things it cannot tell apart — overwriting a component with a
-// new value, which in Zig is a hand-over, and duplicating one into another entity, which
-// is not expressible. This derives the hand-over, because that is what `set` does and
-// `set` is the common call; the consequence is stated on `typeHooks`.
-//=============================================================================
-
-/// flecs's lifecycle hooks for `T`, worked out at compile time.
-///
-/// A plain-data component gets nothing — the empty hook set, which is what flecs
-/// assumes anyway — so this costs nothing to apply to a type that does not need it.
-///
-/// A component with a `deinit` method gets:
-///
-/// - a destructor that calls it, so removing the component, deleting the entity or
-///   destroying the world releases what the value owns;
-/// - a constructor, when every field of `T` has a default, so a value flecs creates on
-///   its own is `T{}` rather than zeroes. Without one, flecs zeroes the memory;
-/// - a copy that destroys what the destination held before taking the source's bits.
-///   Setting a component twice therefore frees the first value instead of leaking it,
-///   and `set` reads as handing ownership to the world.
-///
-/// Which puts one requirement on the type: `deinit` has to be safe to call on a value
-/// flecs constructed and nothing has been written to yet — `T{}`, or all zeroes when
-/// there is no `T{}` to write. That value is what the copy destroys before it takes the
-/// first value a component is ever set to.
-///
-/// The unrepresentable case is duplication: `ecs_clone` and instantiating a prefab that
-/// carries an owning component will produce two values pointing at one allocation.
-/// Zig has no copy constructor to derive one from, so a component with a `deinit`
-/// should not be put on a prefab.
-///
-/// `deinit` must take exactly one parameter, the value. A `deinit` that also wants an
-/// allocator — `std.ArrayList`'s, among others — cannot be called from a flecs hook,
-/// which is handed nothing but the pointer, so that is a compile error here rather than
-/// a surprise later. Wrap such a type in one that remembers its allocator.
-pub fn typeHooks(comptime T: type) c.ecs_type_hooks_t {
-    // flecs refuses hooks on a zero-sized component, and there is nothing for them to
-    // act on anyway.
-    if (comptime @sizeOf(T) == 0) return .{};
-    if (comptime !hasDeinit(T)) return .{};
-
-    const thunks = Thunks(T);
-    return .{
-        .ctor = if (comptime hasDefaultValue(T)) &thunks.ctor else null,
-        .dtor = &thunks.dtor,
-        .copy = &thunks.copy,
-    };
-}
-
-/// The C-ABI functions flecs holds for `T`. Generated per type at compile time, so each
-/// one is an ordinary loop over a typed slice rather than a walk through a `void*`.
-fn Thunks(comptime T: type) type {
-    return struct {
-        fn ctor(ptr: ?*anyopaque, count: i32, _: ?*const c.ecs_type_info_t) callconv(.c) void {
-            for (slice(ptr, count)) |*value| value.* = .{};
-        }
-
-        fn dtor(ptr: ?*anyopaque, count: i32, _: ?*const c.ecs_type_info_t) callconv(.c) void {
-            for (slice(ptr, count)) |*value| value.deinit();
-        }
-
-        fn copy(
-            dst: ?*anyopaque,
-            src: ?*const anyopaque,
-            count: i32,
-            _: ?*const c.ecs_type_info_t,
-        ) callconv(.c) void {
-            const from: [*]const T = @ptrCast(@alignCast(src.?));
-            for (slice(dst, count), from[0..@intCast(count)]) |*to, *value| {
-                // The destination is a live component. flecs's own default here is a
-                // memcpy over it, which would strand whatever it owned.
-                to.deinit();
-                to.* = value.*;
-            }
-        }
-
-        inline fn slice(ptr: ?*anyopaque, count: i32) []T {
-            const typed: [*]T = @ptrCast(@alignCast(ptr.?));
-            return typed[0..@intCast(count)];
-        }
-    };
-}
-
-fn hasDeinit(comptime T: type) bool {
-    switch (@typeInfo(T)) {
-        .@"struct", .@"union", .@"enum" => {},
-        else => return false,
-    }
-    if (!@hasDecl(T, "deinit")) return false;
-    const Deinit = @TypeOf(@field(T, "deinit"));
-    if (@typeInfo(Deinit) != .@"fn") return false;
-    if (@typeInfo(Deinit).@"fn".params.len != 1) @compileError(
-        "zecs cannot derive a destructor for " ++ @typeName(T) ++ ": its `deinit` takes " ++
-            "more than the value, and a flecs hook is handed nothing else. Wrap the type " ++
-            "in one whose `deinit` needs no arguments, or write the hooks by hand.",
-    );
-    return true;
-}
-
-/// Whether `T{}` is a value: every field has a default, so flecs can construct one
-/// without being told anything.
-fn hasDefaultValue(comptime T: type) bool {
-    return switch (@typeInfo(T)) {
-        .@"struct" => |info| for (info.fields) |field| {
-            if (field.default_value_ptr == null) break false;
-        } else true,
         else => false,
     };
 }

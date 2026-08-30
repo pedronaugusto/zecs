@@ -1478,11 +1478,23 @@ test "paths are written, resolved and created with any separator" {
 
     const made = try world.newFromPath("a.b.c", .{});
     try std.testing.expectEqualStrings("c", world.getName(made).?);
-    try std.testing.expectEqual(made, world.lookup("a.b.c"));
+    try std.testing.expectEqual(made, world.lookupPath("a.b.c", .{}));
     // Intermediate entities are created along the way.
-    try std.testing.expect(world.lookup("a.b") != 0);
+    try std.testing.expect(world.lookupPath("a.b", .{}) != 0);
     // And asking again finds the same one rather than making a second.
     try std.testing.expectEqual(made, try world.newFromPath("a.b.c", .{}));
+
+    // `lookup` is the literal one, and is the half that matches how this package writes
+    // names: a component is registered under `@typeName(T)`, dots and all, and looking
+    // that up as a PATH asks for a `Position` inside a scope called `main` — which is
+    // not what was created, and used to answer 0.
+    const dotted = try world.entity(.{ .name = "one.two" });
+    try std.testing.expectEqual(dotted, world.lookup("one.two"));
+    try std.testing.expectEqual(@as(zecs.Entity, 0), world.lookupPath("one.two", .{}));
+    try std.testing.expectEqual(@as(zecs.Entity, 0), world.lookup("a.b.c"));
+
+    const position = try world.component(Position, .{});
+    try std.testing.expectEqual(position.asId(), world.lookup(@typeName(Position)));
 }
 
 test "a scope guard parents what is made inside it and restores the old scope" {
@@ -1750,7 +1762,11 @@ test "hooks can be installed after registration, and flecs constructs with them"
     const world = try zecs.World.init();
     defer world.deinit();
 
-    const owned = try world.component(Owned, .{});
+    // Registration derives the hooks, so `setHooks` here is the second install rather
+    // than the first: what it proves is that installing over an existing set is accepted
+    // and leaves flecs constructing with them, which is the case a caller hits when the
+    // type gained a `deinit` after the component was registered somewhere else.
+    const owned = try world.component(Owned, .{ .hooks = .{} });
     world.setHooks(owned);
 
     // `ensure` adds the component without a value, so flecs constructs it. The derived
@@ -1766,6 +1782,239 @@ test "hooks can be installed after registration, and flecs constructs with them"
     world.delete(e);
     try std.testing.expectEqual(@as(i32, 0), owned_live);
 }
+
+//-----------------------------------------------------------------------------
+// Duplication: prefabs, instances and clone
+//-----------------------------------------------------------------------------
+
+var copied_live: i32 = 0;
+
+/// A component that owns something AND says how to copy it. `copied_live` stands in for
+/// the allocation, so a value that is duplicated raises it and a value that is handed
+/// over does not.
+const Copied = struct {
+    tag: u32 = 0,
+    alive: bool = false,
+
+    fn make(tag: u32) Copied {
+        copied_live += 1;
+        return .{ .tag = tag, .alive = true };
+    }
+
+    pub fn dupe(self: Copied) Copied {
+        if (!self.alive) return .{ .tag = self.tag, .alive = false };
+        copied_live += 1;
+        return .{ .tag = self.tag, .alive = true };
+    }
+
+    pub fn deinit(self: *Copied) void {
+        if (!self.alive) return;
+        self.alive = false;
+        copied_live -= 1;
+    }
+};
+
+test "registering a component installs the hooks its type needs, without being asked" {
+    try zecs.setAllocator(std.testing.allocator);
+    owned_live = 0;
+
+    const world = try zecs.World.init();
+    defer world.deinit();
+
+    // `.{}` used to mean "no hooks", so an owning component registered the obvious way
+    // leaked every value ever put in it and nothing said so. It now means "the ones the
+    // type needs".
+    const owned = try world.component(Owned, .{});
+
+    const e = world.newEntity();
+    world.set(e, owned, Owned.make(1));
+    try std.testing.expectEqual(@as(i32, 1), owned_live);
+    world.delete(e);
+    try std.testing.expectEqual(@as(i32, 0), owned_live);
+
+    // And a caller who wants none says so.
+    const bare = try world.component(Plain, .{ .hooks = .{} });
+    _ = bare;
+}
+
+test "a type that cannot be copied is marked, and the operations that would copy it refuse" {
+    try zecs.setAllocator(std.testing.allocator);
+    owned_live = 0;
+
+    const world = try zecs.World.init();
+    defer world.deinit();
+
+    const position = try world.component(Position, .{});
+    const owned = try world.component(Owned, .{});
+
+    try std.testing.expect(zecs.duplicable(Position));
+    try std.testing.expect(!zecs.duplicable(Owned));
+
+    const plain_source = world.newEntity();
+    world.set(plain_source, position, .{ .x = 3, .y = 4 });
+
+    // Plain data clones, and the copy is independent.
+    const copy = try world.clone(0, plain_source, true);
+    try std.testing.expectEqual(@as(f32, 3), world.get(copy, position).?.x);
+    world.getMut(copy, position).?.x = 9;
+    try std.testing.expectEqual(@as(f32, 3), world.get(plain_source, position).?.x);
+    try std.testing.expectEqual(@as(zecs.Entity, 0), world.notDuplicable(plain_source));
+
+    // An owning component with no `dupe` does not, and the refusal names it.
+    const owning_source = world.newEntity();
+    world.set(owning_source, owned, Owned.make(1));
+    try std.testing.expectEqual(owned.asId(), world.notDuplicable(owning_source));
+    try std.testing.expectError(
+        zecs.Error.ComponentNotDuplicable,
+        world.clone(0, owning_source, true),
+    );
+
+    // Cloning the SHAPE without the values is still fine: nothing is copied.
+    const shape = try world.clone(0, owning_source, false);
+    try std.testing.expect(world.has(shape, owned));
+    try std.testing.expectEqual(@as(i32, 1), owned_live);
+}
+
+test "a type that says how to copy itself clones into an independent value" {
+    try zecs.setAllocator(std.testing.allocator);
+    copied_live = 0;
+
+    {
+        const world = try zecs.World.init();
+        defer world.deinit();
+
+        const copied = try world.component(Copied, .{});
+        try std.testing.expect(zecs.duplicable(Copied));
+
+        const source = world.newEntity();
+        world.set(source, copied, Copied.make(1));
+        // `set` copied: the caller's temporary and the world's value are two.
+        try std.testing.expectEqual(@as(i32, 2), copied_live);
+
+        const copy = try world.clone(0, source, true);
+        try std.testing.expectEqual(@as(u32, 1), world.get(copy, copied).?.tag);
+        try std.testing.expectEqual(@as(i32, 3), copied_live);
+
+        world.delete(copy);
+        try std.testing.expectEqual(@as(i32, 2), copied_live);
+    }
+
+    // The world took its own value with it; the caller's temporary was never the
+    // world's to free, which is what "lives by value" means.
+    try std.testing.expectEqual(@as(i32, 1), copied_live);
+    copied_live = 0;
+}
+
+test "an instance of a prefab gets its own copy of the prefab's components" {
+    try zecs.setAllocator(std.testing.allocator);
+
+    const world = try zecs.World.init();
+    defer world.deinit();
+
+    const position = try world.component(Position, .{});
+    const health = try world.component(Health, .{});
+
+    const base = try world.prefab("Enemy");
+    world.set(base, position, .{ .x = 1, .y = 2 });
+    world.set(base, health, .{ .value = 100 });
+
+    // A prefab is left out of queries, which is the point of it.
+    const q = try world.queryOf(.{position}, .{});
+    defer q.deinit();
+    try std.testing.expectEqual(@as(i32, 0), q.query.count().entities);
+
+    const instance = world.newEntity();
+    try world.isA(instance, base);
+
+    // Override is flecs's default, so the instance owns its own value.
+    try std.testing.expect(world.owns(instance, position));
+    try std.testing.expectEqual(@as(f32, 1), world.get(instance, position).?.x);
+    world.getMut(instance, position).?.x = 50;
+    try std.testing.expectEqual(@as(f32, 1), world.get(base, position).?.x);
+
+    // And the instance is an ordinary entity as far as queries are concerned.
+    try std.testing.expectEqual(@as(i32, 1), q.query.count().entities);
+    try std.testing.expectEqual(@as(i32, 100), world.get(instance, health).?.value);
+}
+
+test "a component marked to inherit is shared by the instances rather than copied" {
+    try zecs.setAllocator(std.testing.allocator);
+
+    const world = try zecs.World.init();
+    defer world.deinit();
+
+    const health = try world.component(Health, .{});
+    try world.inheritOnInstantiate(health);
+
+    const base = try world.prefab("Shared");
+    world.set(base, health, .{ .value = 42 });
+
+    const a = world.newEntity();
+    const b = world.newEntity();
+    try world.isA(a, base);
+    try world.isA(b, base);
+
+    // Both read the base's value, and neither has one of its own.
+    try std.testing.expect(!world.owns(a, health));
+    try std.testing.expect(world.has(a, health));
+    try std.testing.expectEqual(@as(i32, 42), world.get(a, health).?.value);
+
+    world.getMut(base, health).?.value = 7;
+    try std.testing.expectEqual(@as(i32, 7), world.get(a, health).?.value);
+    try std.testing.expectEqual(@as(i32, 7), world.get(b, health).?.value);
+}
+
+test "instantiating a prefab that carries an uncopyable component is refused" {
+    try zecs.setAllocator(std.testing.allocator);
+    owned_live = 0;
+
+    const world = try zecs.World.init();
+    defer world.deinit();
+
+    const owned = try world.component(Owned, .{});
+
+    // Marked before it is used anywhere: instances never receive a copy of this one, so
+    // it is not a hazard even though its type cannot be duplicated.
+    const hidden = try world.component(HiddenOwned, .{});
+    try world.dontInheritOnInstantiate(hidden);
+
+    const base = try world.prefab("Owner");
+    world.set(base, owned, Owned.make(1));
+    world.set(base, hidden, .{ .live = &hidden_live });
+    hidden_live = 1;
+    try std.testing.expectEqual(@as(i32, 1), owned_live);
+
+    const instance = world.newEntity();
+    try std.testing.expectError(zecs.Error.ComponentNotDuplicable, world.isA(instance, base));
+    try std.testing.expect(!world.has(instance, owned));
+    // One value, still the prefab's.
+    try std.testing.expectEqual(@as(i32, 1), owned_live);
+
+    // Without the component flecs would have copied, the instance is allowed — and it
+    // simply does not get the one that is marked away.
+    world.remove(base, owned);
+    try std.testing.expectEqual(@as(i32, 0), owned_live);
+    try world.isA(instance, base);
+    try std.testing.expect(!world.has(instance, hidden));
+    try std.testing.expectEqual(@as(i32, 1), hidden_live);
+
+    // And the trait cannot be changed once the component is in use: flecs aborts on
+    // that, so the package refuses first.
+    try std.testing.expectError(zecs.Error.ComponentInUse, world.overrideOnInstantiate(hidden));
+}
+
+var hidden_live: i32 = 0;
+
+/// Owns something, like `Owned`, but kept off instances by its trait rather than by the
+/// refusal — the other half of the same rule.
+const HiddenOwned = struct {
+    live: ?*i32 = null,
+
+    pub fn deinit(self: *HiddenOwned) void {
+        if (self.live) |counter| counter.* -= 1;
+        self.live = null;
+    }
+};
 
 test "a flecs string is freed through flecs's own allocator" {
     var counting = Counting{ .backing = std.testing.allocator };
@@ -2668,7 +2917,7 @@ test "a script creates the entities and components it describes" {
         try std.testing.expect(sun != 0);
         try std.testing.expectEqual(Position{ .x = 10, .y = 20 }, world.get(sun, position).?.*);
 
-        const earth = world.lookup("sun.earth");
+        const earth = world.lookupPath("sun.earth", .{});
         try std.testing.expect(earth != 0);
         try std.testing.expectEqual(sun, world.getParent(earth));
         try std.testing.expectEqual(Position{ .x = 30, .y = 40 }, world.get(earth, position).?.*);
@@ -3228,7 +3477,7 @@ test "a module runs once per world and nests what it creates" {
 
     // Everything the module made is a child of it, because flecs sets the scope for
     // the duration of the import.
-    const gravity = world.lookup("physics.Gravity");
+    const gravity = world.lookupPath("physics.Gravity", .{});
     try std.testing.expect(gravity != 0);
     try std.testing.expectEqual(physics, world.getParent(gravity));
 

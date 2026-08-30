@@ -1,0 +1,126 @@
+//=============================================================================
+// Component lifecycle hooks, derived from the Zig type
+//
+// flecs asks for eight function pointers to describe how a component is constructed,
+// destroyed, copied and moved. Zig answers most of that by itself, so most of the eight
+// should stay null, and getting which ones right is the whole content of this section.
+//
+// Relocation first, because it is the one flecs cannot guess. A Zig value has no move
+// constructor and no identity: relocating it is a memcpy, and the source is not left
+// needing anything. That is exactly what flecs does when `move` is null — it memcpys
+// into the destination and does not destruct the source — so a Zig type wants no move
+// hook at all. Setting one would be worse than useless: flecs would then treat the move
+// as non-trivial and destruct the source after every table change, freeing what the
+// destination now owns.
+//
+// Copying is the opposite case: Zig has no copy constructor either, so there is nothing
+// to derive. A bitwise copy of a value that owns memory produces two owners. flecs uses
+// the copy hook for two things it cannot tell apart — overwriting a component with a
+// new value, which in Zig is a hand-over, and duplicating one into another entity, which
+// is not expressible. This derives the hand-over, because that is what `set` does and
+// `set` is the common call; the consequence is stated on `typeHooks`.
+//=============================================================================
+
+/// flecs's lifecycle hooks for `T`, worked out at compile time.
+///
+/// A plain-data component gets nothing — the empty hook set, which is what flecs
+/// assumes anyway — so this costs nothing to apply to a type that does not need it.
+///
+/// A component with a `deinit` method gets:
+///
+/// - a destructor that calls it, so removing the component, deleting the entity or
+///   destroying the world releases what the value owns;
+/// - a constructor, when every field of `T` has a default, so a value flecs creates on
+///   its own is `T{}` rather than zeroes. Without one, flecs zeroes the memory;
+/// - a copy that destroys what the destination held before taking the source's bits.
+///   Setting a component twice therefore frees the first value instead of leaking it,
+///   and `set` reads as handing ownership to the world.
+///
+/// Which puts one requirement on the type: `deinit` has to be safe to call on a value
+/// flecs constructed and nothing has been written to yet — `T{}`, or all zeroes when
+/// there is no `T{}` to write. That value is what the copy destroys before it takes the
+/// first value a component is ever set to.
+///
+/// The unrepresentable case is duplication: `ecs_clone` and instantiating a prefab that
+/// carries an owning component will produce two values pointing at one allocation.
+/// Zig has no copy constructor to derive one from, so a component with a `deinit`
+/// should not be put on a prefab.
+///
+/// `deinit` must take exactly one parameter, the value. A `deinit` that also wants an
+/// allocator — `std.ArrayList`'s, among others — cannot be called from a flecs hook,
+/// which is handed nothing but the pointer, so that is a compile error here rather than
+/// a surprise later. Wrap such a type in one that remembers its allocator.
+pub fn typeHooks(comptime T: type) c.ecs_type_hooks_t {
+    // flecs refuses hooks on a zero-sized component, and there is nothing for them to
+    // act on anyway.
+    if (comptime @sizeOf(T) == 0) return .{};
+    if (comptime !hasDeinit(T)) return .{};
+
+    const thunks = Thunks(T);
+    return .{
+        .ctor = if (comptime hasDefaultValue(T)) &thunks.ctor else null,
+        .dtor = &thunks.dtor,
+        .copy = &thunks.copy,
+    };
+}
+
+/// The C-ABI functions flecs holds for `T`. Generated per type at compile time, so each
+/// one is an ordinary loop over a typed slice rather than a walk through a `void*`.
+fn Thunks(comptime T: type) type {
+    return struct {
+        fn ctor(ptr: ?*anyopaque, count: i32, _: ?*const c.ecs_type_info_t) callconv(.c) void {
+            for (slice(ptr, count)) |*value| value.* = .{};
+        }
+
+        fn dtor(ptr: ?*anyopaque, count: i32, _: ?*const c.ecs_type_info_t) callconv(.c) void {
+            for (slice(ptr, count)) |*value| value.deinit();
+        }
+
+        fn copy(
+            dst: ?*anyopaque,
+            src: ?*const anyopaque,
+            count: i32,
+            _: ?*const c.ecs_type_info_t,
+        ) callconv(.c) void {
+            const from: [*]const T = @ptrCast(@alignCast(src.?));
+            for (slice(dst, count), from[0..@intCast(count)]) |*to, *value| {
+                // The destination is a live component. flecs's own default here is a
+                // memcpy over it, which would strand whatever it owned.
+                to.deinit();
+                to.* = value.*;
+            }
+        }
+
+        inline fn slice(ptr: ?*anyopaque, count: i32) []T {
+            const typed: [*]T = @ptrCast(@alignCast(ptr.?));
+            return typed[0..@intCast(count)];
+        }
+    };
+}
+
+fn hasDeinit(comptime T: type) bool {
+    switch (@typeInfo(T)) {
+        .@"struct", .@"union", .@"enum" => {},
+        else => return false,
+    }
+    if (!@hasDecl(T, "deinit")) return false;
+    const Deinit = @TypeOf(@field(T, "deinit"));
+    if (@typeInfo(Deinit) != .@"fn") return false;
+    if (@typeInfo(Deinit).@"fn".params.len != 1) @compileError(
+        "zecs cannot derive a destructor for " ++ @typeName(T) ++ ": its `deinit` takes " ++
+            "more than the value, and a flecs hook is handed nothing else. Wrap the type " ++
+            "in one whose `deinit` needs no arguments, or write the hooks by hand.",
+    );
+    return true;
+}
+
+/// Whether `T{}` is a value: every field has a default, so flecs can construct one
+/// without being told anything.
+fn hasDefaultValue(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .@"struct" => |info| for (info.fields) |field| {
+            if (field.default_value_ptr == null) break false;
+        } else true,
+        else => false,
+    };
+}
