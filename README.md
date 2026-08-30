@@ -5,10 +5,11 @@
 > **What that badge does and does not say.** It reports the workflow in
 > [`.github/workflows/ci.yml`](.github/workflows/ci.yml), which describes runs on Linux,
 > macOS, Windows-gnu and Windows-MSVC. Executed by hand so far: the suite on Windows
-> x86_64, both the gnu and the MSVC ABI, plus the example consumer on both. Every other
-> configuration in the matrix has been cross-compiled and linked, and never run. Wherever
-> this file says "CI runs", read it as "the workflow says", and read
-> [Platform coverage](#platform-coverage) for what has actually happened.
+> x86_64 — the whole of `ci/run.sh` on the gnu ABI and again on the MSVC one, the example
+> consumer and the mutation proof included. Every other configuration in the matrix has
+> been cross-compiled and linked, and never run. Wherever this file says "CI runs", read
+> it as "the workflow says", and read [Platform coverage](#platform-coverage) for what
+> has actually happened.
 
 This is [flecs](https://github.com/SanderMertens/flecs) — Sander Mertens's entity
 component system, version 4.1.6, vendored byte for byte — with a Zig API over it and no
@@ -436,10 +437,21 @@ zig build bench -Doptimize=ReleaseFast   # the numbers above
 ci/mutate.sh                             # prove the ABI guard still refuses drift
 ci/run.sh                                # the CI matrix, locally
 ci/run.sh --quick                        # native Debug only, for the inner loop
+ci/run.sh --target <triple>              # the whole roster on one ABI instead
 ci/install-hooks.sh                      # run it automatically before every push
 ```
 
 `ci/run.sh` reports every failure rather than stopping at the first.
+
+`--target` is there because "the suite passes" is a claim about an ABI, not about a
+machine. Windows has two, and they disagree about the width of a C enum — a difference
+this package had wrong. Every build in the script carries the arm, so a step added later
+cannot be one-ABI by omission:
+
+```sh
+ci/run.sh --target native-native-msvc    # the same roster, the other Windows ABI
+ci/mutate.sh -Dtarget=x86_64-windows-msvc
+```
 
 ### Continuous integration
 
