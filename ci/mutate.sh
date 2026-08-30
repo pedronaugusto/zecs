@@ -38,7 +38,6 @@ C=src/c
 TODO_FILE=src/abi_todo.zig
 ABI_FILE=src/c/abi.zig
 COMPONENT_FILE=src/component.zig
-WORLD_FILE=src/world.zig
 
 # One backup of the whole of src/. The mutations reach past the declaration modules now
 # — a refusal in the typed layer is proved by planting the thing it refuses — and three
@@ -302,6 +301,23 @@ mutate 'abi: the va_list pointee is the wrong type' "$ABI_FILE" '
 s = s.replace(".windows, .uefi => [*c]u8,", ".windows, .uefi => [*c]u64,", 1)
 '
 
+# Every pointer on a 64-bit target is eight bytes with eight-byte alignment, so width
+# alone cannot tell `*T` from `*const T`. Dropping `const` from a parameter the header
+# declares `const` is the binding claiming a licence to write through a pointer the
+# library promises not to be written through — the guard has to read the pointer's own
+# constness to see it, and this is the proof that it does.
+mutate 'abi: a const parameter loses its const' "$C" '
+s = s.replace("ecs_get_alert_count(world: *const ecs_world_t",
+              "ecs_get_alert_count(world: *ecs_world_t", 1)
+' 'claims a write the header does not allow'
+
+# The other half of the same hole: two pointers of identical width addressing elements
+# of different widths. Reading a `u64` array as `u32` is a real crash, and nothing about
+# the pointer itself says so — only what it points at does.
+mutate 'abi: a pointee is the wrong width' "$C" '
+s = s.replace("children: ?[*]const ecs_entity_t", "children: ?[*]const u32", 1)
+' 'pointee'
+
 printf '\n%sRefusals in the typed layer%s\n' "$BOLD" "$OFF"
 
 # flecs allocates a component column with a plain `ecs_os_malloc`, so 16 bytes is the
@@ -317,7 +333,7 @@ s = s.replace("""test "a zero-sized type is a tag" {""",
 
 # A `deinit` that also wants an allocator cannot be called from a flecs hook, which is
 # handed nothing but the pointer. Same shape of proof.
-mutate 'refusal: a deinit that needs more than the value' "$WORLD_FILE" '
+mutate 'refusal: a deinit that needs more than the value' "$COMPONENT_FILE" '
 s = s.replace("""fn hasDeinit(comptime T: type) bool {""",
               """test "planted: a deinit taking an allocator is refused" {
     _ = typeHooks(struct {

@@ -204,8 +204,34 @@ fn sameSizeAndAlign(
     }
 }
 
-/// Signedness on top of width. An `i32` declared where the header has `u32` has the
-/// same size and alignment and a different meaning at every comparison and cast.
+/// Signedness on top of width, and what a pointer points AT on top of both.
+///
+/// Width alone leaves a hole the size of every pointer in flecs: on a 64-bit target
+/// `*T`, `*const T`, `?[*]u8` and `?*anyopaque` are all eight bytes with eight-byte
+/// alignment, so a size-and-alignment comparison sees no difference between a parameter
+/// this package promises not to write through and one it does. `checkPointer` closes the
+/// part of that hole the two sides can actually be compared on.
+///
+/// **What is compared, and what is not.** translate-c renders every C pointer as `[*c]T`
+/// — nullable, unbounded, unowned — because that is all C says. This package's externs
+/// are deliberately narrower: `*ecs_world_t` where the world is never null, `[*:0]const u8`
+/// for a C string, `?[*]ecs_id_t` for an array that may be absent. Insisting those match
+/// would be insisting the bindings be as vague as the header. So the comparison is of the
+/// two things C DOES say and Zig carries faithfully:
+///
+///   * `const` in the direction that can be wrong — `const T*` becomes `[*c]const T`,
+///     and a hand-written `*T` against it is a promise this package is not entitled to
+///     make. The other direction is allowed: declaring `*const T` where the header says
+///     `T*` is the same kind of narrowing as declaring `*T` where it says `[*c]T`, and
+///     `ecs_iter_t.trs` is a deliberate instance of it — flecs writes that array, and
+///     nothing reading an iterator has any business doing so;
+///   * what the pointee is, by width and signedness, one level down, with `anyopaque` on
+///     either side treated as the wildcard it is and function pointees compared as
+///     functions.
+///
+/// Deliberately NOT compared, and therefore the blind spots of this guard: nullability,
+/// how many elements a pointer addresses, sentinels, and ownership. None of those exist
+/// in the header to compare against.
 fn sameScalar(comptime what: []const u8, comptime Ours: type, comptime Theirs: type) void {
     sameSizeAndAlign(what, Ours, Theirs);
     const ours = @typeInfo(Ours);
@@ -218,6 +244,77 @@ fn sameScalar(comptime what: []const u8, comptime Ours: type, comptime Theirs: t
         fail(what ++ " is " ++ @typeName(Ours) ++ " in src/c.zig but " ++
             @typeName(Theirs) ++ " in flecs.h");
     }
+    checkPointer(what, Ours, Theirs, 0);
+}
+
+/// What a pointer type carries, once `?` has been peeled off it. Null for anything that
+/// is not a pointer.
+fn Pointee(comptime T: type) ?std.builtin.Type.Pointer {
+    return switch (@typeInfo(T)) {
+        .pointer => |ptr| ptr,
+        .optional => |opt| switch (@typeInfo(opt.child)) {
+            .pointer => |ptr| ptr,
+            else => null,
+        },
+        else => null,
+    };
+}
+
+/// Whether a type says nothing about what is behind it, so that comparing it would be
+/// comparing this package's typing against C's silence.
+fn isOpaqueish(comptime T: type) bool {
+    return T == anyopaque or T == void or @typeInfo(T) == .@"opaque";
+}
+
+/// The pointer half of `sameScalar`. `depth` stops a function pointer whose parameters
+/// are function pointers from recursing without end; two levels is past everything flecs
+/// declares (`ecs_sort_table_action_t` takes an `ecs_order_by_action_t`).
+fn checkPointer(
+    comptime what: []const u8,
+    comptime Ours: type,
+    comptime Theirs: type,
+    comptime depth: usize,
+) void {
+    if (depth > 2) return;
+
+    const ours = Pointee(Ours);
+    const them = Pointee(Theirs);
+    if (ours == null and them == null) return;
+    if (ours == null or them == null) {
+        fail(what ++ " is " ++ @typeName(Ours) ++ " in src/c.zig but " ++
+            @typeName(Theirs) ++ " in flecs.h: one is a pointer and the other is not");
+    }
+
+    if (them.?.is_const and !ours.?.is_const) {
+        fail(what ++ " points at mutable data in src/c.zig and const data in flecs.h: " ++
+            "the binding claims a write the header does not allow");
+    }
+    if (ours.?.is_volatile != them.?.is_volatile) {
+        fail(what ++ " disagrees with flecs.h about `volatile`");
+    }
+
+    const OurChild = ours.?.child;
+    const TheirChild = them.?.child;
+    // `void*` is C saying nothing, and this package saying something is the point of it.
+    if (isOpaqueish(OurChild) or isOpaqueish(TheirChild)) return;
+
+    if (@typeInfo(OurChild) == .@"fn" or @typeInfo(TheirChild) == .@"fn") {
+        if (@typeInfo(OurChild) != .@"fn" or @typeInfo(TheirChild) != .@"fn") {
+            fail(what ++ " points at a function in one of src/c.zig and flecs.h and not " ++
+                "the other");
+        }
+        checkFnType(what ++ " pointee", OurChild, TheirChild);
+        return;
+    }
+
+    sameSizeAndAlign(what ++ " pointee", OurChild, TheirChild);
+    const oc = @typeInfo(OurChild);
+    const tc = @typeInfo(TheirChild);
+    if (oc == .int and tc == .int and oc.int.signedness != tc.int.signedness) {
+        fail(what ++ " points at " ++ @typeName(OurChild) ++ " in src/c.zig but " ++
+            @typeName(TheirChild) ++ " in flecs.h");
+    }
+    checkPointer(what ++ " pointee", OurChild, TheirChild, depth + 1);
 }
 
 /// Compares two function types by the only things translate-c preserves: how many

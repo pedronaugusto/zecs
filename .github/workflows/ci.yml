@@ -76,6 +76,16 @@ jobs:
       - name: Test — ReleaseFast (sanitize)
         run: zig build test -Doptimize=ReleaseFast -Ddebug_checks=sanitize
 
+      # The widest addon set, EXECUTED on each host. The guard's exact coverage
+      # assertions — no declaration without a counterpart, and the real shape of flecs
+      # rather than a floor — are runtime assertions inside the ABI test, so compiling
+      # under `everything` does not reach them. Until this step existed they were
+      # reached on one Linux runner and on the MSVC arm, and nowhere else: a symbol
+      # whose header counterpart exists only on Linux would have been a green build on
+      # macOS and on Windows-gnu.
+      - name: Test — every addon (exact ABI coverage)
+        run: zig build test -Daddons=everything
+
       # Zig's default ABI for Windows is gnu, so every step above exercises that one.
       # On a Windows runner the MSVC ABI is native, so the suite can run there too
       # rather than merely compile.
