@@ -578,6 +578,47 @@ pub fn build(b: *std.Build) void {
     );
     manifest_check_step.dependOn(&manifest_check.step);
 
+    // The other generated list: which of the symbols this package binds are flecs's
+    // API and which are its insides. The manifest above says what flecs exports; this
+    // says what a consumer is entitled to call, and it fails the build if anything
+    // above the raw layer has taken a dependency on flecs's implementation.
+    const tiers_tool = b.addExecutable(.{
+        .name = "gen-api-tiers",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/gen_api_tiers.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }),
+    });
+
+    const tiers_gen = b.addRunArtifact(tiers_tool);
+    tiers_gen.addDirectoryArg(b.path("src"));
+    const tiers_out = tiers_gen.addOutputFileArg("api_tiers.zig");
+    // The tool reads a directory rather than a file list, and a directory's contents
+    // are not what the run cache keys on. Both runs are a second, and a check that can
+    // be skipped is not a check.
+    tiers_gen.has_side_effects = true;
+
+    const tiers_update = b.addUpdateSourceFiles();
+    tiers_update.addCopyFileToSource(tiers_out, "src/api_tiers.zig");
+    const tiers_step = b.step(
+        "api-tiers",
+        "Regenerate src/api_tiers.zig from the declarations in src/c/",
+    );
+    tiers_step.dependOn(&tiers_update.step);
+
+    const tiers_check = b.addRunArtifact(tiers_tool);
+    tiers_check.addDirectoryArg(b.path("src"));
+    tiers_check.addArg("--check");
+    tiers_check.addFileArg(b.path("src/api_tiers.zig"));
+    tiers_check.expectExitCode(0);
+    tiers_check.has_side_effects = true;
+    const tiers_check_step = b.step(
+        "api-tiers-check",
+        "Fail if src/api_tiers.zig is stale, or if the typed layer calls a flecs internal",
+    );
+    tiers_check_step.dependOn(&tiers_check.step);
+
     //-------------------------------------------------------------------------
     // Tests
     //-------------------------------------------------------------------------
