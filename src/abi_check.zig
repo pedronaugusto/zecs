@@ -95,6 +95,28 @@ const unrepresentable = [_]struct { name: []const u8, covered_by: []const u8 }{
     },
 };
 
+/// Declarations whose header counterpart is a DIFFERENT type from the one that crosses
+/// the ABI, so pairing the two by name would compare the wrong pair of things.
+///
+/// There is exactly one, and it is not a loophole: `va_list` names a C *object* type,
+/// and on x86_64 System V that object is an array, which C decays to a pointer at every
+/// call. Comparing our parameter type against the header's array type would fail on the
+/// targets where the two agree about what is passed, and pass on none. So the pairing
+/// moves to where the ABI actually is — the parameter — and the test named below does
+/// it, on the same target, against the same `@cImport`.
+///
+/// Like `unrepresentable`, every entry must be reached: the test at the bottom checks
+/// the count, so an entry that stops applying after a re-vendor is a failure rather than
+/// a permanent hole.
+const compared_by_use = [_]struct { name: []const u8, covered_by: []const u8 }{
+    .{
+        .name = "va_list",
+        .covered_by = "the `a va_list crosses the ABI the way flecs.h passes one` test " ++
+            "below, which compares this declaration against the parameter type " ++
+            "@cImport gives `ecs_strbuf_vappend` for the target being built.",
+    },
+};
+
 /// Declarations flecs replaces with a same-named *macro* when an addon is switched off.
 ///
 /// There is no symbol behind a macro to compare a signature against, and — the reason
@@ -124,6 +146,11 @@ fn isMacroInThisBuild(comptime name: []const u8) bool {
 
 fn isUnrepresentable(comptime name: []const u8) bool {
     for (unrepresentable) |u| if (std.mem.eql(u8, u.name, name)) return true;
+    return false;
+}
+
+fn isComparedByUse(comptime name: []const u8) bool {
+    for (compared_by_use) |u| if (std.mem.eql(u8, u.name, name)) return true;
     return false;
 }
 
@@ -318,6 +345,8 @@ const Counts = struct {
     addon_absent: usize = 0,
     /// Entries of `unrepresentable` that were actually reached.
     excepted: usize = 0,
+    /// Entries of `compared_by_use` that were actually reached.
+    by_use: usize = 0,
 };
 
 fn sweepOurs() Counts {
@@ -340,6 +369,11 @@ fn sweepOurs() Counts {
 
             if (isUnrepresentable(d.name)) {
                 n.excepted += 1;
+                continue;
+            }
+
+            if (isComparedByUse(d.name)) {
+                n.by_use += 1;
                 continue;
             }
 
@@ -632,6 +666,7 @@ test "ABI: src/c.zig agrees with flecs.h" {
     // Every exception is reached, so one that stops applying after a re-vendor is
     // noticed rather than left as a permanent hole.
     try std.testing.expectEqual(unrepresentable.len, ours.excepted);
+    try std.testing.expectEqual(compared_by_use.len, ours.by_use);
 
     // With every addon on there is nothing the header can be missing, so a declaration
     // in `c.zig` that has no counterpart is a misspelling, not a configuration — and
@@ -667,6 +702,58 @@ test "ABI: src/c.zig covers what flecs exports" {
             manifest.functions.len + manifest.variables.len,
             coverage.declared,
         );
+    }
+}
+
+test "ABI: a va_list crosses the ABI the way flecs.h passes one" {
+    // `va_list` is the one declaration this guard does not pair by name — see
+    // `compared_by_use` — because C's `va_list` names an OBJECT type and the object is
+    // an array on x86_64 System V, which decays at every call. The ABI is the
+    // parameter, so the parameter is what is compared, on the target being built and
+    // against the same `@cImport` as everything else.
+    //
+    // `ecs_strbuf_vappend` is flecs's string builder and no addon switches it off, so
+    // this is unconditional: a header that stopped declaring it fails here rather than
+    // quietly skipping the only check `va_list` has.
+    comptime {
+        if (!@hasDecl(h, "ecs_strbuf_vappend")) {
+            fail("flecs.h no longer declares `ecs_strbuf_vappend`, which is where the " ++
+                "shape of a `va_list` argument is pinned. Point this at another entry " ++
+                "point that takes one.");
+        }
+        const their_fn = @typeInfo(@TypeOf(h.ecs_strbuf_vappend)).@"fn";
+        if (their_fn.params.len != 3) {
+            fail("flecs.h's `ecs_strbuf_vappend` no longer takes three parameters, so " ++
+                "the third is no longer the `va_list` this compares.");
+        }
+
+        const what = "`va_list`, as a parameter";
+        const Ours = c.core.va_list;
+        const Theirs = their_fn.params[2].type orelse fail(what ++ " is untyped in flecs.h");
+
+        sameSizeAndAlign(what, Ours, Theirs);
+
+        const ours = @typeInfo(Ours);
+        const them = @typeInfo(Theirs);
+        if (std.meta.activeTag(ours) != std.meta.activeTag(them)) {
+            fail(what ++ " is a " ++ @tagName(ours) ++ " in src/c.zig but a " ++
+                @tagName(them) ++ " in flecs.h. An `.array` on this side is the decay " ++
+                "that src/c/abi.zig exists to perform.");
+        }
+        switch (ours) {
+            // Size and alignment alone would accept a pointer to the wrong thing, and
+            // on System V the pointee is the register-save block varargs walks.
+            .pointer => sameSizeAndAlign(
+                what ++ "'s pointee",
+                ours.pointer.child,
+                them.pointer.child,
+            ),
+            // Passed by value: every field has to line up, exactly as for any other
+            // struct that crosses.
+            .@"struct" => _ = checkStructLayout(what, Ours, Theirs),
+            else => fail(what ++ " is a " ++ @tagName(ours) ++ ", which this check does " ++
+                "not know how to compare"),
+        }
     }
 }
 
