@@ -655,6 +655,122 @@ test "a system runs from progress and sees its delta time" {
     try std.testing.expectEqual(@as(f32, 2), world.get(e, position).?.x);
 }
 
+//=============================================================================
+// The typed spec
+//
+// The same system, built from one tuple instead of a term list plus a set of field
+// indices that has to agree with it.
+//=============================================================================
+
+const Movers = struct {
+    zecs.Component(Position),
+    zecs.In(zecs.Component(Velocity)),
+};
+
+var typed_system_runs: u32 = 0;
+
+fn moveTyped(row: zecs.RowOf(Movers)) void {
+    const dt: f32 = @floatCast(row.deltaTime());
+    const positions, const velocities = row.fields;
+    for (positions, velocities) |*p, v| {
+        p.x += v.x * dt;
+        p.y += v.y * dt;
+    }
+    typed_system_runs += 1;
+}
+
+test "a system built from a typed spec reads the components the spec named" {
+    try zecs.setAllocator(std.testing.allocator);
+    const world = try zecs.World.init();
+    defer world.deinit();
+
+    const position = try world.component(Position, .{});
+    const velocity = try world.component(Velocity, .{});
+    const movers: Movers = .{ position, zecs.in(velocity) };
+
+    typed_system_runs = 0;
+    _ = try world.system(.{
+        .name = "MoveTyped",
+        .phase = zecs.Builtin.on_update.id(),
+        .query = .{ .terms = &zecs.SpecOf(Movers).build(movers) },
+        .callback = zecs.rowCallback(Movers, moveTyped),
+    });
+
+    const e = world.newEntity();
+    world.set(e, position, .{ .x = 0, .y = 0 });
+    world.set(e, velocity, .{ .x = 2, .y = 4 });
+
+    _ = world.progress(0.5);
+    try std.testing.expectEqual(@as(u32, 1), typed_system_runs);
+    try std.testing.expectEqual(@as(f32, 1), world.get(e, position).?.x);
+    try std.testing.expectEqual(@as(f32, 2), world.get(e, position).?.y);
+}
+
+test "a typed query hands back slices of the type the handle carried" {
+    try zecs.setAllocator(std.testing.allocator);
+    const world = try zecs.World.init();
+    defer world.deinit();
+
+    const position = try world.component(Position, .{});
+    const velocity = try world.component(Velocity, .{});
+    const health = try world.component(Health, .{});
+    const player = try world.component(Player, .{});
+
+    // Two entities in two different tables, so the loop below really does run twice.
+    const a = world.newEntity();
+    world.set(a, position, .{ .x = 1, .y = 1 });
+    world.set(a, velocity, .{ .x = 1, .y = 0 });
+
+    const b = world.newEntity();
+    world.set(b, position, .{ .x = 10, .y = 10 });
+    world.set(b, velocity, .{ .x = 2, .y = 0 });
+    world.set(b, health, .{ .value = 7 });
+
+    // And one the `without` term must keep out.
+    const excluded = world.newEntity();
+    world.set(excluded, position, .{ .x = 500, .y = 0 });
+    world.set(excluded, velocity, .{ .x = 1, .y = 0 });
+    world.add(excluded, player);
+
+    const q = try world.queryOf(
+        .{ position, zecs.in(velocity), zecs.optional(health), zecs.without(player) },
+        .{ .cache_kind = .auto },
+    );
+    defer q.deinit();
+
+    var tables: usize = 0;
+    var with_health: usize = 0;
+    var it = q.iter();
+    defer it.deinit();
+    while (it.next()) |row| {
+        // Three data terms out of four: `without` constrains and carries nothing.
+        const p, const v, const maybe_h = row.fields;
+        for (p, v) |*pos, vel| pos.x += vel.x;
+        if (maybe_h) |h| with_health += h.len;
+        tables += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), tables);
+    try std.testing.expectEqual(@as(usize, 1), with_health);
+    try std.testing.expectEqual(@as(f32, 2), world.get(a, position).?.x);
+    try std.testing.expectEqual(@as(f32, 12), world.get(b, position).?.x);
+    try std.testing.expectEqual(@as(f32, 500), world.get(excluded, position).?.x);
+
+    // And per entity, with the optional term arriving as a nullable pointer.
+    var sum: f32 = 0;
+    var healthy: u32 = 0;
+    const Acc = struct { sum: *f32, healthy: *u32 };
+    q.each(Acc{ .sum = &sum, .healthy = &healthy }, struct {
+        fn body(acc: Acc, e: zecs.Entity, p: *Position, v: *const Velocity, h: ?*Health) void {
+            _ = e;
+            _ = v;
+            acc.sum.* += p.x;
+            if (h != null) acc.healthy.* += 1;
+        }
+    }.body);
+    try std.testing.expectEqual(@as(f32, 14), sum);
+    try std.testing.expectEqual(@as(u32, 1), healthy);
+}
+
 test "a system with no phase runs only when asked" {
     try zecs.setAllocator(std.testing.allocator);
     const world = try zecs.World.init();

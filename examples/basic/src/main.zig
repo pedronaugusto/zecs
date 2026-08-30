@@ -9,14 +9,27 @@ const zecs = @import("zecs");
 const Position = struct { x: f32, y: f32 };
 const Velocity = struct { x: f32, y: f32 };
 
-/// A system callback receives the iterator, not the entities. `fieldSelf` hands back a
-/// slice of the whole matched table, so the loop below is over contiguous memory rather
-/// than one lookup per entity — which is the reason to use an archetype ECS at all.
-fn move(it: *zecs.Iter) void {
-    const dt: f32 = @floatCast(it.deltaTime());
-    for (it.fieldSelf(Position, 0), it.fieldSelf(Velocity, 1)) |*p, v| {
-        p.x += v.x * dt;
-        p.y += v.y * dt;
+/// What the system matches, written as a type because the callback's parameter needs it
+/// before `main` has registered anything. A component handle is a runtime value — a
+/// component belongs to a world, not to the program — but its TYPE is what carries
+/// `Position` and `Velocity` into the row, and that is known here.
+///
+/// The terms the system is built with and the slices `move` reads both come from this one
+/// declaration, so inserting a term cannot leave the loop reading the wrong component.
+const Movers = struct {
+    zecs.Component(Position),
+    zecs.In(zecs.Component(Velocity)),
+};
+
+/// A system callback receives one matched table at a time, so the loop is over contiguous
+/// slices rather than one lookup per entity — which is the reason to use an archetype ECS
+/// at all. `row.fields` is a tuple in spec order: `[]Position` and `[]const Velocity`.
+fn move(row: zecs.RowOf(Movers)) void {
+    const dt: f32 = @floatCast(row.deltaTime());
+    const p, const v = row.fields;
+    for (p, v) |*pos, vel| {
+        pos.x += vel.x * dt;
+        pos.y += vel.y * dt;
     }
 }
 
@@ -45,14 +58,12 @@ pub fn main() !void {
     world.set(e, position, .{ .x = 0, .y = 0 });
     world.set(e, velocity, .{ .x = 1, .y = 2 });
 
+    const movers: Movers = .{ position, zecs.in(velocity) };
     _ = try world.system(.{
         .name = "Move",
         .phase = zecs.Builtin.on_update.id(),
-        .query = .{ .terms = &.{
-            .{ .id = position.asId(), .inout = .read_write },
-            .{ .id = velocity.asId(), .inout = .read },
-        } },
-        .callback = zecs.callback(move),
+        .query = .{ .terms = &zecs.SpecOf(Movers).build(movers) },
+        .callback = zecs.rowCallback(Movers, move),
     });
 
     for (0..10) |_| _ = world.progress(1.0 / 60.0);

@@ -104,6 +104,7 @@ pub const CacheKind = types.CacheKind;
 pub const Term = types.Term;
 pub const TermRef = types.TermRef;
 pub const QueryDesc = types.QueryDesc;
+pub const QueryOptions = types.QueryOptions;
 
 pub const pair = types.pair;
 pub const pairFirst = types.pairFirst;
@@ -133,6 +134,7 @@ const component_mod = @import("component.zig");
 const world_mod = @import("world.zig");
 const iter_mod = @import("iter.zig");
 const query_mod = @import("query.zig");
+const terms_mod = @import("terms.zig");
 const system_mod = @import("system.zig");
 const observer_mod = @import("observer.zig");
 const table_mod = @import("table.zig");
@@ -165,6 +167,39 @@ pub const Iterator = iter_mod.Iterator;
 pub const callback = iter_mod.callback;
 
 pub const Query = query_mod.Query;
+
+/// The typed query: terms derived from a tuple of component handles, results handed back
+/// as typed slices in the same order. `World.queryOf` builds one. See `terms.zig` for
+/// what the derivation covers and what it deliberately refuses.
+pub const QueryOf = query_mod.QueryOf;
+
+/// The spec markers. A bare handle is a read-write term; these are the rest.
+pub const in = terms_mod.in;
+pub const out = terms_mod.out;
+pub const optional = terms_mod.optional;
+pub const without = terms_mod.without;
+pub const withId = terms_mod.withId;
+pub const withoutId = terms_mod.withoutId;
+pub const term = terms_mod.term;
+pub const TermOptions = terms_mod.TermOptions;
+
+/// The same markers as types, for writing a spec's type down where a callback's
+/// parameter needs it: `const Movers = struct { Component(Position), In(Component(Velocity)) };`
+pub const Marked = terms_mod.Marked;
+pub const In = terms_mod.In;
+pub const Out = terms_mod.Out;
+pub const Optional = terms_mod.Optional;
+pub const Without = terms_mod.Without;
+pub const WithId = terms_mod.WithId;
+pub const WithoutId = terms_mod.WithoutId;
+
+/// The derivation itself, for building a system or an observer out of the same spec the
+/// callback reads: `SpecOf(@TypeOf(spec)).build(spec)` is the term list, `RowOf` is the
+/// callback's parameter type, and `rowCallback` is the thunk between them.
+pub const SpecOf = terms_mod.Spec;
+pub const RowOf = terms_mod.RowOf;
+pub const rowCallback = terms_mod.rowCallback;
+
 pub const SystemDesc = system_mod.SystemDesc;
 pub const ObserverDesc = observer_mod.ObserverDesc;
 
@@ -280,6 +315,7 @@ test {
     _ = component_mod;
     _ = iter_mod;
     _ = query_mod;
+    _ = terms_mod;
     _ = system_mod;
     _ = observer_mod;
     _ = world_mod;

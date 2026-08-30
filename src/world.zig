@@ -17,6 +17,7 @@ const memory = @import("memory.zig");
 const component_mod = @import("component.zig");
 const iter_mod = @import("iter.zig");
 const query_mod = @import("query.zig");
+const terms_mod = @import("terms.zig");
 const system_mod = @import("system.zig");
 const observer_mod = @import("observer.zig");
 const Error = @import("error.zig").Error;
@@ -728,6 +729,40 @@ pub const World = struct {
         var c_desc = try desc.toC();
         const raw = c.ecs_query_init(self.raw, &c_desc) orelse return Error.QueryInitFailed;
         return .{ .raw = raw, .world = self.raw };
+    }
+
+    /// A query whose terms come from a tuple of component handles, and whose results come
+    /// back as typed slices in the same order.
+    ///
+    /// ```zig
+    /// const q = try world.queryOf(.{ position, zecs.in(velocity) }, .{});
+    /// defer q.deinit();
+    ///
+    /// var it = q.iter();
+    /// defer it.deinit();
+    /// while (it.next()) |row| {
+    ///     const p, const v = row.fields;
+    ///     for (p, v) |*pos, vel| pos.x += vel.x * row.deltaTime();
+    /// }
+    /// ```
+    ///
+    /// The second argument is `QueryOptions` rather than `QueryDesc` because the terms
+    /// come from the spec: there is no second place to put them, so there is nothing for
+    /// the two to disagree about. `World.query` remains the way to build a query with
+    /// traversal, query variables or an `Or` chain, which the derivation cannot type.
+    pub fn queryOf(
+        self: World,
+        spec: anytype,
+        options: types.QueryOptions,
+    ) Error!query_mod.QueryOf(@TypeOf(spec)) {
+        const S = terms_mod.Spec(@TypeOf(spec));
+        const built = S.build(spec);
+        const q = try self.query(.{ .terms = &built, .options = options });
+        // The derivation assumes one field per term, in order. flecs is the authority on
+        // that, so it is asked rather than trusted — at the one point where a query first
+        // exists to ask.
+        std.debug.assert(S.checkLayout(q.raw));
+        return .{ .query = q };
     }
 
     /// Iterates every entity with one id, with no query to compile first. The cheapest
