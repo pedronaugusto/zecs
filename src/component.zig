@@ -17,8 +17,50 @@ const types = @import("types.zig");
 const Entity = types.Entity;
 const Id = types.Id;
 
+/// The strongest alignment flecs gives a component's storage.
+///
+/// A table's column is allocated with `ecs_os_malloc(component_size * count)` —
+/// `libs/flecs/flecs.c:44676`, and every other place a column is created or grown has
+/// the same shape — and neither `ecs_os_malloc` nor the block allocator behind it takes
+/// an alignment argument. What comes back is C's `malloc` guarantee, which is 16 bytes
+/// on every target this package builds for. `src/memory.zig` holds its own bridge to
+/// exactly 16 so that installing a Zig allocator is not weaker than leaving libc's in
+/// place.
+///
+/// This is flecs's limit, not one this package chose, and it is not a policy: a
+/// component wanting more is not stored badly, it is stored at an address the CPU may
+/// fault on. It moves the day flecs grows an aligned allocation path — and the refusal
+/// below is what will make that a visible change rather than a silent one.
+pub const max_alignment: u29 = 16;
+
+/// Whether flecs can store `T` at the alignment `T` requires.
+///
+/// Separate from the `@compileError` that uses it so that the rule itself is testable:
+/// a `@compileError` cannot be caught, so a refusal wired up wrongly and a refusal that
+/// never fires look identical from inside the language. The tests below drive this on
+/// types either side of the limit, and `ci/mutate.sh` proves the wiring by planting an
+/// over-aligned component and requiring the build to fail.
+pub fn isStorable(comptime T: type) bool {
+    return @alignOf(T) <= max_alignment;
+}
+
+/// The refusal. Reached by resolving `Component(T)`, which every route to a registered
+/// component goes through.
+fn requireStorable(comptime T: type) void {
+    if (!isStorable(T)) @compileError(
+        "zecs cannot store " ++ @typeName(T) ++ " as a component: it needs " ++
+            std.fmt.comptimePrint("{d}", .{@alignOf(T)}) ++ "-byte alignment and flecs " ++
+            "allocates component columns with a plain `ecs_os_malloc`, which guarantees " ++
+            std.fmt.comptimePrint("{d}", .{max_alignment}) ++ ". flecs would put the " ++
+            "column at an address this type may not legally live at, and neither " ++
+            "compiler would say so. Store it behind a pointer or a handle the component " ++
+            "holds, or lower the alignment.",
+    );
+}
+
 /// A registered component, carrying its type.
 pub fn Component(comptime T: type) type {
+    comptime requireStorable(T);
     return struct {
         const Self = @This();
 
@@ -109,4 +151,28 @@ test "a tag describes as zero size and zero alignment" {
     const desc = describe(Tag, .{});
     try std.testing.expectEqual(@as(c.ecs_size_t, 0), desc.type.size);
     try std.testing.expectEqual(@as(c.ecs_size_t, 0), desc.type.alignment);
+}
+
+test "a type flecs can align is storable, and one it cannot is not" {
+    // Either side of the limit, and the boundary itself. The limit is flecs's — see
+    // `max_alignment` — so these are assertions about flecs's storage, not about Zig.
+    try std.testing.expect(isStorable(struct { x: f32 }));
+    try std.testing.expect(isStorable(u64));
+    try std.testing.expect(isStorable(@Vector(4, f32))); // 16
+    try std.testing.expect(isStorable(struct { v: f32 align(max_alignment) }));
+
+    try std.testing.expect(!isStorable(struct { v: f32 align(max_alignment * 2) }));
+    try std.testing.expect(!isStorable(@Vector(8, f32))); // 32: an AVX register
+    try std.testing.expect(!isStorable(@Vector(16, f32))); // 64
+}
+
+test "the limit is the one the allocator bridge hands flecs" {
+    // Two homes for one number would be the defect this package is most exposed to:
+    // `src/memory.zig` promises flecs a 16-byte payload and this file refuses anything
+    // that needs more, and if the two ever disagreed the refusal would be checking the
+    // wrong bound. They are compared rather than kept in step by hand.
+    try std.testing.expectEqual(
+        @as(usize, max_alignment),
+        @import("memory.zig").payload_alignment.toByteUnits(),
+    );
 }

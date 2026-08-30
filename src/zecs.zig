@@ -155,6 +155,11 @@ pub const typeHooks = world_mod.typeHooks;
 pub const Component = component_mod.Component;
 pub const ComponentDesc = component_mod.ComponentDesc;
 
+/// The strongest alignment flecs gives a component's storage, and the predicate the
+/// typed layer refuses over. flecs's own limit — see `component.zig`.
+pub const max_component_alignment = component_mod.max_alignment;
+pub const componentIsStorable = component_mod.isStorable;
+
 pub const Iter = iter_mod.Iter;
 pub const Iterator = iter_mod.Iterator;
 pub const callback = iter_mod.callback;
