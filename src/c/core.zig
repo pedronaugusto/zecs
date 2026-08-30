@@ -2298,8 +2298,6 @@ pub extern const FLECS_IDEcsParentID_: ecs_entity_t;
 
 pub extern const FLECS_IDEcsPipelineID_: ecs_entity_t;
 
-pub extern const FLECS_IDEcsPipelineQueryID_: ecs_entity_t;
-
 pub extern var FLECS_IDEcsPipelineStatsID_: ecs_entity_t;
 
 pub extern const FLECS_IDEcsPolyID_: ecs_entity_t;

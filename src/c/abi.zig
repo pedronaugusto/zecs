@@ -34,47 +34,54 @@ const builtin = @import("builtin");
 /// `src/types.zig`, tagged with this same integer.
 pub const c_enum = if (builtin.target.abi == .msvc) c_int else c_uint;
 
-/// The type of a parameter declared `va_list` in C.
+/// The type of a parameter declared `va_list` in C, for this target.
 ///
-/// C's `va_list` names an *object* type, and the standard allows that object to be an
-/// array — in which case a parameter of that type decays to a pointer, and the object
-/// type is NOT what crosses the ABI. There are three shapes among the targets this
-/// package builds for [measured 2026-08-30, `zig translate-c` 0.16.0, one header per
-/// target]:
+/// C's `va_list` names an *object* type, and the standard lets that object be an array
+/// — in which case a parameter of that type decays to a pointer and the object type is
+/// NOT what crosses the ABI. `std.builtin.VaList` names the object, so deriving the
+/// parameter from it is a per-ABI question with three answers. Measured 2026-08-30 with
+/// `zig translate-c` 0.16.0, one header per target, reading the type it gives a
+/// `va_list` parameter:
 ///
-/// * `[*c]u8` — every Windows ABI (both architectures, gnu and msvc) and
-///   aarch64-macOS, where `__builtin_va_list` is `char *`.
-/// * an array of one register-save descriptor, decayed — x86_64 System V (Linux gnu
-///   and musl, x86_64-macOS): the parameter is `[*c]struct___va_list_tag`, eight
-///   bytes, while `std.builtin.VaList` names the twenty-four-byte array.
-/// * a struct passed by value — aarch64-Linux and the other ABIs `std` spells out.
+/// | target                                   | parameter type                 |
+/// |------------------------------------------|--------------------------------|
+/// | x86_64 windows (gnu and msvc), uefi      | `[*c]u8`                       |
+/// | aarch64 windows, aarch64 macOS           | `[*c]u8`                       |
+/// | x86_64 System V — Linux gnu/musl, macOS  | `[*c]struct___va_list_tag`, 8 B|
+/// | aarch64 Linux                            | a 32-byte struct, by value     |
 ///
-/// Deriving the parameter type from the object type is therefore a decay, not a copy:
-/// the middle case is a real ABI defect if it is taken verbatim, and it was — the
-/// package declared `std.builtin.VaList` and nothing on a System V target ever
-/// compiled the guard that would have said so.
+/// The System V row is the one that has to be written down rather than derived:
+/// `std.builtin.VaList` is the 24-byte `VaListX86_64` *object* there, so taking it
+/// verbatim passes a struct by value where C passes a pointer. That is a real ABI
+/// defect on Linux and x86_64 macOS, and this package shipped it — nothing compiled
+/// the guard for a System V target.
 ///
-/// The first case also has to be spelled out rather than derived, because
-/// `std.builtin.VaList` is not a type there at all: on x86_64 Windows and UEFI with
-/// the LLVM backend it is `@compileError("disabled due to miscompilations")` — zig
-/// 0.16.0, `lib/std/builtin.zig:1053`. That refusal is about Zig *implementing*
-/// varargs; it says nothing about handing an opaque `char *` straight back to C, which
-/// is all any of the six flecs entry points taking one of these does. Naming the
-/// pointer directly is the whole fix, and it is the same pointer `@cImport` produces.
-pub const va_list = if (is_char_pointer_va_list)
-    [*c]u8
-else switch (@typeInfo(std.builtin.VaList)) {
-    // The array case. C decays it at the call; so does this.
-    .array => |a| [*c]a.child,
-    else => std.builtin.VaList,
-};
-
-/// Targets whose `__builtin_va_list` is `char *`. Written out rather than derived
-/// because `std.builtin.VaList` cannot be *looked at* on the x86_64 half of it.
-const is_char_pointer_va_list = switch (builtin.target.cpu.arch) {
+/// Two of the four rows also cannot be reached through `std.builtin.VaList` at all: it
+/// is `@compileError("disabled due to miscompilations")` for x86_64 Windows/UEFI (zig
+/// 0.16.0, `lib/std/builtin.zig:1053`) and for aarch64 Linux (`:1041`) under the LLVM
+/// backend. That refusal is about Zig *implementing* varargs; the six flecs entry
+/// points taking one of these only hand an opaque object straight back to C, and the
+/// per-architecture structs `std` exports — `VaListX86_64`, `VaListAarch64` — are not
+/// behind the refusal and are what the tables above are built from.
+///
+/// Everything here is checked rather than trusted: `src/abi_check.zig` compares this
+/// against the parameter type `@cImport` gives `ecs_strbuf_vappend` on the target being
+/// built, so a wrong row is a compile error on the target it is wrong for — which is
+/// how the System V row was found.
+pub const va_list = switch (builtin.target.cpu.arch) {
     .x86_64 => switch (builtin.target.os.tag) {
-        .windows, .uefi => true,
-        else => false,
+        // `__builtin_va_list` is `char *`.
+        .windows, .uefi => [*c]u8,
+        // System V: an array of one register-save block, decayed by the call.
+        else => [*c]std.builtin.VaListX86_64,
     },
-    else => false,
+    .aarch64, .aarch64_be => switch (builtin.target.os.tag) {
+        .windows, .uefi, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => [*c]u8,
+        // AAPCS64: `struct __va_list`, passed by value.
+        else => std.builtin.VaListAarch64,
+    },
+    // Every other architecture: `std`'s object type is also what is passed, as far as
+    // any target this package is built for goes. The guard decides, not this comment —
+    // a target where that is wrong fails to compile with both types named.
+    else => std.builtin.VaList,
 };
