@@ -63,7 +63,7 @@ patch, then `ecs_os_set_api()`. Skipping the first call is not a small mistake:
 allocator onto a freshly zeroed struct therefore ends up with null `log_`, `abort_`,
 `get_time_` and every thread, mutex and condition-variable callback, and flecs calls
 through one of them during world creation. The crash is a jump to address zero inside
-`ecs_init`, some distance from the cause. `src/memory.zig` always performs the full
+`ecs_init`, some distance from the cause. `src/os.zig` always performs the full
 sequence.
 
 **Installing an allocator too late is silently accepted, not refused.**
@@ -81,7 +81,7 @@ the callbacks it installed are the ones flecs is holding.
 
 **`ecs_os_api_malloc` asserts `size > 0` but callers are not required to honour it.**
 The assert vanishes under `NDEBUG`, and `malloc(0)` is implementation-defined. The
-bridge in `src/memory.zig` treats a non-positive size as a failed allocation and returns
+bridge in `src/os.zig` treats a non-positive size as a failed allocation and returns
 null, which is a defined answer flecs handles, rather than passing it through.
 
 **An empty root separator silently discards the parent.** `ecs_entity_desc_t` has `sep`

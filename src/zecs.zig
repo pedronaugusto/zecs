@@ -78,16 +78,29 @@ const error_mod = @import("error.zig");
 pub const Error = error_mod.Error;
 
 //=============================================================================
-// Memory
+// The OS API: memory, logging, aborting, profiling
+//
+// flecs reaches the outside world through one process-wide struct of function
+// pointers, so one file installs it and everything routed out of flecs is routed
+// from there. `src/os.zig` says which fields are routed and which are left to
+// flecs's own implementation, and why.
 //=============================================================================
 
-const memory = @import("memory.zig");
+const os = @import("os.zig");
 
-pub const setAllocator = memory.setAllocator;
-pub const resetAllocator = memory.resetAllocator;
-pub const allocatorInstalled = memory.allocatorInstalled;
-pub const allocationStats = memory.stats;
-pub const AllocationStats = memory.Stats;
+pub const setAllocator = os.setAllocator;
+pub const resetAllocator = os.resetAllocator;
+pub const allocatorInstalled = os.allocatorInstalled;
+pub const allocationStats = os.stats;
+pub const AllocationStats = os.Stats;
+
+pub const LogLevel = os.LogLevel;
+pub const LogHandler = os.LogHandler;
+pub const AbortHandler = os.AbortHandler;
+pub const TraceHandler = os.TraceHandler;
+pub const setLogHandler = os.setLogHandler;
+pub const setAbortHandler = os.setAbortHandler;
+pub const setTraceHandler = os.setTraceHandler;
 
 //=============================================================================
 // Core types
@@ -321,7 +334,7 @@ pub const flecs_version: Version = .{ .major = 4, .minor = 1, .patch = 6 };
 test {
     // Pull every module in so its own tests are discovered.
     _ = error_mod;
-    _ = memory;
+    _ = os;
     _ = types;
     _ = component_mod;
     _ = iter_mod;
