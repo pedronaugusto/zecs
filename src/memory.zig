@@ -56,7 +56,10 @@ const Error = @import("error.zig").Error;
 
 /// Alignment handed to flecs. C's `malloc` guarantees this much, flecs assumes it for
 /// component storage, and nothing in flecs ever asks for more.
-const payload_alignment: std.mem.Alignment = .@"16";
+///
+/// Public so that `component.max_alignment` — the bound the typed layer refuses over —
+/// can be compared against it rather than kept in step by hand. One number, two users.
+pub const payload_alignment: std.mem.Alignment = .@"16";
 
 const Header = struct {
     /// Total bytes taken from the backing allocator, header included.
