@@ -140,6 +140,9 @@ pub const Rest = struct {
 /// Zero until the rest module has been imported, which `World.init` does and
 /// `World.initMinimal` does not.
 pub inline fn restComponent() Component(c.EcsRest) {
+    // No world: `FLECS_IDEcsRestID_` is a process-global that the Rest module writes
+    // when it is imported, so the id is not any one world's to have minted, and
+    // `World.owns` has nothing to compare it against.
     return .{ .id = c.FLECS_IDEcsRestID_ };
 }
 
