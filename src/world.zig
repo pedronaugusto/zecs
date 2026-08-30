@@ -12,6 +12,9 @@
 
 const std = @import("std");
 const c = @import("c/entity.zig");
+// `ecs_get_world` maps a stage back to the world behind it, and lives in the
+// world module rather than the entity one.
+const c_world = @import("c/world.zig");
 const types = @import("types.zig");
 const os = @import("os.zig");
 const component_mod = @import("component.zig");
@@ -324,7 +327,7 @@ pub const World = struct {
             c.ecs_add_id(self.raw, id, try self.entity(.{ .name = not_duplicable }));
         }
 
-        return .{ .id = id };
+        return .{ .id = id, .world = self.raw };
     }
 
     /// Installs the lifecycle hooks `typeHooks` derives for the component's Zig type.
@@ -335,7 +338,7 @@ pub const World = struct {
     /// guaranteed to be true of.
     pub inline fn setHooks(self: World, comp: anytype) void {
         const derived = component_mod.typeHooks(@TypeOf(comp).Type);
-        c.ecs_set_hooks_id(self.raw, comp.asId(), &derived);
+        c.ecs_set_hooks_id(self.raw, self.idOf(comp), &derived);
     }
 
     //=========================================================================
@@ -354,7 +357,7 @@ pub const World = struct {
 
     /// Creates an entity that starts with one component.
     pub fn newWith(self: World, comp: anytype) Entity {
-        return c.ecs_new_w_id(self.raw, comp.asId());
+        return c.ecs_new_w_id(self.raw, self.idOf(comp));
     }
 
     /// Creates an entity from a description: named, parented, or with several ids at
@@ -386,7 +389,7 @@ pub const World = struct {
     /// entity invalidates it, and so does an observer that fires from this call. Copy
     /// it before doing either.
     pub inline fn bulkNew(self: World, comp: anytype, count: i32) Error![]const Entity {
-        return self.bulkNewId(comp.asId(), count);
+        return self.bulkNewId(self.idOf(comp), count);
     }
 
     /// `bulkNew` for a tag, a pair, or an id built at runtime. A zero id creates
@@ -644,6 +647,46 @@ pub const World = struct {
         return .{ .raw = c.ecs_children(self.raw, parent) };
     }
 
+    /// The id a handle carries, checked against this world.
+    ///
+    /// Component ids are per-world and are handed out in registration order, so the
+    /// same number means different things in two worlds — see the head of
+    /// `src/component.zig` for what that costs. Comparing the worlds is one load and
+    /// one branch, and `std.debug.assert` removes it in ReleaseFast, where a host that
+    /// has already run the same code in a checked build is paying for nothing.
+    ///
+    /// `ecs_get_world` rather than the pointers themselves: a system runs against a
+    /// stage, which is a different pointer for the same world, and a handle registered
+    /// on the world is legitimately used from one.
+    inline fn idOf(self: World, handle: anytype) Id {
+        std.debug.assert(self.minted(handle));
+        return handle.asId();
+    }
+
+    /// Whether this world is the one that minted `handle`.
+    ///
+    /// Not `owns`: that name is flecs's, for whether an entity has a component of its
+    /// own rather than inheriting one, and it is taken.
+    ///
+    /// Separate from the assertion that uses it for the same reason `isStorable` is
+    /// separate from the refusal built on it: an assertion cannot be caught, so from
+    /// inside the language a check wired up wrongly and a check that never fires are
+    /// the same thing. The tests drive this on handles from two worlds.
+    ///
+    /// True for a handle that remembers no world — a pair, or one of flecs's global
+    /// component ids. There is nothing to compare it against, which is not the same as
+    /// a mismatch.
+    ///
+    /// `ecs_get_world` rather than the pointers themselves: a system runs against a
+    /// stage, which is a different pointer for the same world, and a handle registered
+    /// on the world is legitimately used from one.
+    pub inline fn minted(self: World, handle: anytype) bool {
+        if (comptime !@hasField(@TypeOf(handle), "world")) return true;
+        const owner = handle.world orelse return true;
+        return c_world.ecs_get_world(@ptrCast(self.raw)) ==
+            c_world.ecs_get_world(@ptrCast(owner));
+    }
+
     //=========================================================================
     // Components on entities
     //
@@ -652,7 +695,7 @@ pub const World = struct {
     //=========================================================================
 
     pub inline fn add(self: World, e: Entity, comp: anytype) void {
-        c.ecs_add_id(self.raw, e, comp.asId());
+        c.ecs_add_id(self.raw, e, self.idOf(comp));
     }
 
     pub inline fn addId(self: World, e: Entity, id: Id) void {
@@ -665,7 +708,7 @@ pub const World = struct {
     }
 
     pub inline fn remove(self: World, e: Entity, comp: anytype) void {
-        c.ecs_remove_id(self.raw, e, comp.asId());
+        c.ecs_remove_id(self.raw, e, self.idOf(comp));
     }
 
     pub inline fn removeId(self: World, e: Entity, id: Id) void {
@@ -678,11 +721,11 @@ pub const World = struct {
     pub inline fn set(self: World, e: Entity, comp: anytype, value: @TypeOf(comp).Type) void {
         const T = @TypeOf(comp).Type;
         if (@sizeOf(T) == 0) {
-            c.ecs_add_id(self.raw, e, comp.asId());
+            c.ecs_add_id(self.raw, e, self.idOf(comp));
             return;
         }
         var local = value;
-        c.ecs_set_id(self.raw, e, comp.asId(), @sizeOf(T), &local);
+        c.ecs_set_id(self.raw, e, self.idOf(comp), @sizeOf(T), &local);
     }
 
     pub inline fn setId(self: World, e: Entity, id: Id, size: usize, ptr: ?*const anyopaque) void {
@@ -695,7 +738,7 @@ pub const World = struct {
     /// the entity between tables — adding or removing a component, deleting another
     /// entity in the same table. Read it, use it, do not keep it.
     pub inline fn get(self: World, e: Entity, comp: anytype) ?*const @TypeOf(comp).Type {
-        const ptr = c.ecs_get_id(self.raw, e, comp.asId()) orelse return null;
+        const ptr = c.ecs_get_id(self.raw, e, self.idOf(comp)) orelse return null;
         return @ptrCast(@alignCast(ptr));
     }
 
@@ -704,7 +747,7 @@ pub const World = struct {
     /// Changing the value through this pointer does not notify observers watching for
     /// `OnSet`; call `modified` when you are done if anything is listening.
     pub inline fn getMut(self: World, e: Entity, comp: anytype) ?*@TypeOf(comp).Type {
-        const ptr = c.ecs_get_mut_id(self.raw, e, comp.asId()) orelse return null;
+        const ptr = c.ecs_get_mut_id(self.raw, e, self.idOf(comp)) orelse return null;
         return @ptrCast(@alignCast(ptr));
     }
 
@@ -712,18 +755,18 @@ pub const World = struct {
     /// for a component with data.
     pub inline fn ensure(self: World, e: Entity, comp: anytype) *@TypeOf(comp).Type {
         const T = @TypeOf(comp).Type;
-        const ptr = c.ecs_ensure_id(self.raw, e, comp.asId(), @sizeOf(T)).?;
+        const ptr = c.ecs_ensure_id(self.raw, e, self.idOf(comp), @sizeOf(T)).?;
         return @ptrCast(@alignCast(ptr));
     }
 
     /// Announces that a component was changed through `getMut` or `ensure`, so that
     /// `OnSet` observers run.
     pub inline fn modified(self: World, e: Entity, comp: anytype) void {
-        c.ecs_modified_id(self.raw, e, comp.asId());
+        c.ecs_modified_id(self.raw, e, self.idOf(comp));
     }
 
     pub inline fn has(self: World, e: Entity, comp: anytype) bool {
-        return c.ecs_has_id(self.raw, e, comp.asId());
+        return c.ecs_has_id(self.raw, e, self.idOf(comp));
     }
 
     pub inline fn hasId(self: World, e: Entity, id: Id) bool {
@@ -733,7 +776,7 @@ pub const World = struct {
     /// Whether the entity has the component itself, rather than inheriting it from a
     /// prefab or a parent.
     pub inline fn owns(self: World, e: Entity, comp: anytype) bool {
-        return c.ecs_owns_id(self.raw, e, comp.asId());
+        return c.ecs_owns_id(self.raw, e, self.idOf(comp));
     }
 
     //=========================================================================
@@ -862,7 +905,7 @@ pub const World = struct {
     /// The same two questions it asks are asked here first, so a caller gets
     /// `Error.ComponentInUse` where flecs would have taken the process down.
     fn setOnInstantiate(self: World, comp: anytype, trait: Entity) Error!void {
-        const id = comp.asId();
+        const id = self.idOf(comp);
         const wildcard = types.Builtin.wildcard.id();
         if (c.ecs_id_in_use(self.raw, id) or
             c.ecs_id_in_use(self.raw, types.pair(id, wildcard)))
@@ -927,7 +970,7 @@ pub const World = struct {
     pub const EachIterator = iter_mod.Iterator(&c.ecs_each_next);
 
     pub fn each(self: World, comp: anytype) EachIterator {
-        return .{ .raw = c.ecs_each_id(self.raw, comp.asId()) };
+        return .{ .raw = c.ecs_each_id(self.raw, self.idOf(comp)) };
     }
 
     pub fn eachId(self: World, id: Id) EachIterator {
@@ -1034,7 +1077,19 @@ pub const World = struct {
 /// world.set(e, zecs.pairOf(damage, fire), .{ .amount = 3 });
 /// ```
 pub inline fn pairOf(first: anytype, second: anytype) Component(PairValue(@TypeOf(first), @TypeOf(second))) {
-    return .{ .id = types.pair(pairElement(first), pairElement(second)) };
+    return .{
+        .id = types.pair(pairElement(first), pairElement(second)),
+        // A pair's id is a function of its halves rather than a registration, so there
+        // is no world that minted it. Whichever half was registered says which world
+        // the pair is about, and a pair of two bare entity ids says nothing at all.
+        .world = pairWorld(first) orelse pairWorld(second),
+    };
+}
+
+/// The world a pair operand was registered in, if it is a handle that remembers one.
+inline fn pairWorld(value: anytype) ?*const c.ecs_world_t {
+    if (comptime !isComponentHandle(@TypeOf(value))) return null;
+    return value.world;
 }
 
 /// The type a `(First, Second)` pair stores, by flecs's rule.

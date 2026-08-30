@@ -8,7 +8,13 @@
 //!
 //! Component ids belong to the world that registered them. Keeping the id in a value
 //! the caller holds, rather than in a global keyed by type, is what makes two worlds in
-//! one process work.
+//! one process work — and the handle remembers WHICH world, because that is the half
+//! that could not be checked otherwise. flecs hands out the next free entity id, so two
+//! worlds registering different components in a different order routinely give them the
+//! same number: world A's `Position` and world B's `Velocity` can be id 512 in both, and
+//! `world_b.set(e, position_from_a, …)` then writes a `Velocity`-shaped hole with a
+//! `Position` and reports nothing. `World` compares the two before every typed
+//! operation.
 
 const std = @import("std");
 const c = @import("c/core.zig");
@@ -68,6 +74,15 @@ pub fn Component(comptime T: type) type {
         pub const Type = T;
 
         id: Entity,
+
+        /// The world that minted this id, checked by every typed operation on `World`.
+        ///
+        /// Null means "not a world's to mint", and there are exactly two of those: a
+        /// pair assembled from two handles, whose id is a function of its halves rather
+        /// than a registration, and one of flecs's process-global component ids such as
+        /// `EcsRest`. A null is not checked, because there is nothing to check it
+        /// against — not because the check is optional.
+        world: ?*const c.ecs_world_t = null,
 
         /// The component as a plain id, for the untyped calls and for pairs.
         pub inline fn asId(self: Self) Id {

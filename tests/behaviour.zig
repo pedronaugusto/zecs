@@ -3579,3 +3579,58 @@ test "the REST component and descriptor are usable without opening a socket" {
     try std.testing.expectEqual(@as(zecs.c.core.ecs_http_reply_action_t, null), c_desc.callback);
     try std.testing.expectEqual(@as(?*anyopaque, null), c_desc.ctx);
 }
+
+test "a component handle knows which world minted it" {
+    var a = try zecs.World.init();
+    defer a.deinit();
+    var b = try zecs.World.init();
+    defer b.deinit();
+
+    const pos_a = try a.component(Position, .{});
+    const pos_b = try b.component(Position, .{});
+
+    // Nothing here is exotic: two worlds registering the same type in the same order
+    // give it the same id, which is exactly why the number cannot be the check.
+    try std.testing.expectEqual(pos_a.id, pos_b.id);
+
+    try std.testing.expect(a.minted(pos_a));
+    try std.testing.expect(b.minted(pos_b));
+    try std.testing.expect(!a.minted(pos_b));
+    try std.testing.expect(!b.minted(pos_a));
+}
+
+test "a handle no world minted belongs to every world" {
+    var world = try zecs.World.init();
+    defer world.deinit();
+
+    // A pair of two bare entity ids is a function of its halves, not a registration.
+    const likes = try world.entity(.{ .name = "Likes" });
+    const apples = try world.entity(.{ .name = "Apples" });
+    try std.testing.expect(world.minted(zecs.pairOf(likes, apples)));
+
+    // A pair with a registered half carries that half's world, and is refused by
+    // another one.
+    var other = try zecs.World.init();
+    defer other.deinit();
+    const pos = try world.component(Position, .{});
+    try std.testing.expect(world.minted(zecs.pairOf(pos, apples)));
+    try std.testing.expect(!other.minted(zecs.pairOf(pos, apples)));
+
+    // flecs's process-global component ids belong to no world in particular.
+    try std.testing.expect(world.minted(zecs.app.restComponent()));
+}
+
+test "a handle is accepted by a stage of the world that minted it" {
+    var world = try zecs.World.init();
+    defer world.deinit();
+
+    const pos = try world.component(Position, .{});
+    zecs.c.world.ecs_set_stage_count(world.raw, 2);
+    defer zecs.c.world.ecs_set_stage_count(world.raw, 1);
+
+    // A stage is a different pointer for the same world, and a handle registered on
+    // the world is meant to be usable from one — which is why the comparison goes
+    // through `ecs_get_world` rather than comparing the pointers.
+    const stage = try world.stage(0);
+    try std.testing.expect(stage.minted(pos));
+}
