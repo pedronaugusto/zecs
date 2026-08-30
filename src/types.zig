@@ -313,12 +313,13 @@ pub const Term = struct {
     }
 };
 
-/// What a query matches, and how it is evaluated.
-pub const QueryDesc = struct {
-    terms: []const Term = &.{},
-    /// A query expression in flecs's DSL, used instead of or alongside `terms`.
-    /// Needs the query_dsl addon.
-    expr: ?[:0]const u8 = null,
+/// How a query is evaluated, as distinct from what it matches.
+///
+/// Split out of `QueryDesc` because a typed query takes exactly this and nothing else:
+/// its terms come from the spec tuple, so a `terms` field on the type it accepts would
+/// be a second way to say the same thing, and the two could disagree. Every option lives
+/// here once, and both query forms read it from here.
+pub const QueryOptions = struct {
     cache_kind: CacheKind = .default,
     /// `EcsQuery*` flags from the raw layer, for the options with no wrapper yet.
     flags: u32 = 0,
@@ -326,6 +327,23 @@ pub const QueryDesc = struct {
     entity: Entity = 0,
     /// Context pointer, delivered to callbacks as `Iter.ctx()`.
     ctx: ?*anyopaque = null,
+
+    /// Fills in the evaluation half of a C descriptor.
+    pub fn applyTo(self: QueryOptions, desc: *c.ecs_query_desc_t) void {
+        desc.cache_kind = @intFromEnum(self.cache_kind);
+        desc.flags = self.flags;
+        desc.entity = self.entity;
+        desc.ctx = self.ctx;
+    }
+};
+
+/// What a query matches, and how it is evaluated.
+pub const QueryDesc = struct {
+    terms: []const Term = &.{},
+    /// A query expression in flecs's DSL, used instead of or alongside `terms`.
+    /// Needs the query_dsl addon.
+    expr: ?[:0]const u8 = null,
+    options: QueryOptions = .{},
 
     /// Fills in a C descriptor. Public because it is the escape hatch: build one of
     /// these, then set the fields this wrapper does not cover before passing it to
@@ -335,11 +353,8 @@ pub const QueryDesc = struct {
 
         var desc = c.ecs_query_desc_t{
             .expr = if (self.expr) |e| e.ptr else null,
-            .cache_kind = @intFromEnum(self.cache_kind),
-            .flags = self.flags,
-            .entity = self.entity,
-            .ctx = self.ctx,
         };
+        self.options.applyTo(&desc);
         for (self.terms, 0..) |term, i| desc.terms[i] = term.toC();
         return desc;
     }

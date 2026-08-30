@@ -4,6 +4,7 @@ const std = @import("std");
 const c = @import("c/query.zig");
 const types = @import("types.zig");
 const iter_mod = @import("iter.zig");
+const terms_mod = @import("terms.zig");
 const Error = @import("error.zig").Error;
 
 /// A compiled query.
@@ -16,7 +17,7 @@ const Error = @import("error.zig").Error;
 /// * an **uncached** query walks the world's component records and re-derives the
 ///   matching tables every time it is iterated.
 ///
-/// `QueryDesc.cache_kind` defaults to `.default`, which is flecs's own default and
+/// `QueryOptions.cache_kind` defaults to `.default`, which is flecs's own default and
 /// means *let flecs decide*: it caches when the query belongs to an entity — a system,
 /// an observer, a named query — or when it uses a feature that cannot work without a
 /// cache (`order_by`, `group_by`, a `Cascade` term, change detection), and does not
@@ -27,7 +28,7 @@ const Error = @import("error.zig").Error;
 ///
 /// That is the right default for a query asked once. For a standing query — one kept
 /// for the lifetime of the thing that asks it, which is what this type is for — pass
-/// `.cache_kind = .auto` and pay the matching once.
+/// `.options = .{ .cache_kind = .auto }` and pay the matching once.
 ///
 /// `cacheKind()` reports what flecs settled on, so the choice is observable rather than
 /// inferred from this comment. Note that `.auto` frequently resolves to `.all`: flecs
@@ -110,7 +111,7 @@ test "the caching policy flecs settles on is the one this type documents" {
     // which of the two cached kinds it picked.
     const cached = try world.query(.{
         .terms = &.{.{ .id = position.asId() }},
-        .cache_kind = .auto,
+        .options = .{ .cache_kind = .auto },
     });
     defer cached.deinit();
     try std.testing.expect(cached.cacheKind() != .none);
@@ -118,6 +119,181 @@ test "the caching policy flecs settles on is the one this type documents" {
     // And the resolution never leaves `.default` behind for a caller to trip over.
     try std.testing.expect(plain.cacheKind() != .default);
     try std.testing.expect(cached.cacheKind() != .default);
+}
+
+/// A query whose terms were derived from a tuple of component handles, and whose results
+/// come back as typed slices in the same order.
+///
+/// This is `Query` plus the derivation in `terms.zig`: the term list and the field reads
+/// are one list rather than two, and the element type of every slice is the one the
+/// handle carried. Everything `Query` can do, this can do — `query` is the untyped
+/// object underneath, and is public for the operations that do not need the types.
+///
+/// ```zig
+/// const q = try world.queryOf(.{ position, zecs.in(velocity) }, .{});
+/// defer q.deinit();
+///
+/// // Per table: contiguous slices, which is the shape an archetype ECS exists for.
+/// var it = q.iter();
+/// defer it.deinit();
+/// while (it.next()) |row| {
+///     const p, const v = row.fields;
+///     for (p, v) |*pos, vel| pos.x += vel.x * row.deltaTime();
+/// }
+///
+/// // Or per entity, when the body genuinely needs one at a time.
+/// q.each({}, struct {
+///     fn body(_: void, e: zecs.Entity, p: *Position, v: *const Velocity) void {
+///         _ = e;
+///         p.x += v.x;
+///     }
+/// }.body);
+/// ```
+pub fn QueryOf(comptime Tuple: type) type {
+    return struct {
+        const Self = @This();
+
+        /// The derivation: term list, row type, field indices.
+        pub const spec = terms_mod.Spec(Tuple);
+
+        /// One matched table, typed.
+        pub const Row = terms_mod.TypedRow(spec);
+
+        /// The untyped query underneath. Holding it rather than re-wrapping every
+        /// operation is what keeps one home for `count`, `changed`, `cacheKind` and the
+        /// raw pointer.
+        query: Query,
+
+        pub fn deinit(self: Self) void {
+            self.query.deinit();
+        }
+
+        /// Iteration state, yielding typed rows.
+        pub const Iterator = struct {
+            inner: Query.Iterator,
+
+            /// The next table, or null when there are none left.
+            pub fn next(self: *Iterator) ?Row {
+                const it = self.inner.next() orelse return null;
+                return .{ .it = it, .fields = spec.row(it) };
+            }
+
+            /// Releases the iterator if the loop did not run to completion. Correct to
+            /// `defer` either way, for the same reason `Query.Iterator.deinit` is.
+            pub fn deinit(self: *Iterator) void {
+                self.inner.deinit();
+            }
+        };
+
+        pub fn iter(self: Self) Iterator {
+            return .{ .inner = self.query.iter() };
+        }
+
+        /// Calls `body(ctx, entity, ptr...)` once per matched entity, over every table.
+        ///
+        /// Runs the iteration to completion, so there is nothing to release. `ctx` is
+        /// whatever the body needs and may be `{}`.
+        pub fn each(self: Self, ctx: anytype, comptime body: anytype) void {
+            var it = self.iter();
+            defer it.deinit();
+            while (it.next()) |row| row.each(ctx, body);
+        }
+    };
+}
+
+test "a typed query reads the components its spec named" {
+    const zecs = @import("zecs.zig");
+
+    const world = try zecs.World.init();
+    defer world.deinit();
+
+    const Position = struct { x: f32 = 0 };
+    const Velocity = struct { x: f32 = 0 };
+    const Frozen = struct {};
+
+    const position = try world.component(Position, .{});
+    const velocity = try world.component(Velocity, .{});
+    const frozen = try world.component(Frozen, .{});
+
+    const moving = world.newEntity();
+    world.set(moving, position, .{ .x = 0 });
+    world.set(moving, velocity, .{ .x = 2 });
+
+    const stuck = world.newEntity();
+    world.set(stuck, position, .{ .x = 100 });
+    world.set(stuck, velocity, .{ .x = 5 });
+    world.add(stuck, frozen);
+
+    const q = try world.queryOf(
+        .{ position, zecs.in(velocity), zecs.without(frozen) },
+        .{ .cache_kind = .auto },
+    );
+    defer q.deinit();
+
+    // Per table.
+    var it = q.iter();
+    defer it.deinit();
+    var seen: usize = 0;
+    while (it.next()) |row| {
+        const p, const v = row.fields;
+        try std.testing.expectEqual(@as(usize, 1), p.len);
+        for (p, v) |*pos, vel| pos.x += vel.x;
+        seen += row.count();
+    }
+    try std.testing.expectEqual(@as(usize, 1), seen);
+    try std.testing.expectEqual(@as(f32, 2), world.get(moving, position).?.x);
+    try std.testing.expectEqual(@as(f32, 100), world.get(stuck, position).?.x);
+
+    // Per entity, and the read-only term really is const: `v` below is `*const Velocity`.
+    var total: f32 = 0;
+    q.each(&total, struct {
+        fn body(acc: *f32, e: zecs.Entity, p: *Position, v: *const Velocity) void {
+            _ = e;
+            p.x += v.x;
+            acc.* += p.x;
+        }
+    }.body);
+    try std.testing.expectEqual(@as(f32, 4), total);
+}
+
+test "an optional term hands back null for the tables that lack it" {
+    const zecs = @import("zecs.zig");
+
+    const world = try zecs.World.init();
+    defer world.deinit();
+
+    const Position = struct { x: f32 = 0 };
+    const Velocity = struct { x: f32 = 0 };
+
+    const position = try world.component(Position, .{});
+    const velocity = try world.component(Velocity, .{});
+
+    const with = world.newEntity();
+    world.set(with, position, .{ .x = 0 });
+    world.set(with, velocity, .{ .x = 3 });
+
+    const without_v = world.newEntity();
+    world.set(without_v, position, .{ .x = 0 });
+
+    const q = try world.queryOf(.{ position, zecs.optional(velocity) }, .{});
+    defer q.deinit();
+
+    var matched: usize = 0;
+    var with_velocity: usize = 0;
+    var it = q.iter();
+    defer it.deinit();
+    while (it.next()) |row| {
+        const p, const maybe_v = row.fields;
+        matched += p.len;
+        if (maybe_v) |v| {
+            with_velocity += v.len;
+            for (p, v) |*pos, vel| pos.x += vel.x;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 2), matched);
+    try std.testing.expectEqual(@as(usize, 1), with_velocity);
+    try std.testing.expectEqual(@as(f32, 3), world.get(with, position).?.x);
+    try std.testing.expectEqual(@as(f32, 0), world.get(without_v, position).?.x);
 }
 
 test {

@@ -161,8 +161,9 @@ pub const Iter = struct {
     /// Releases the iterator's resources.
     ///
     /// Only needed when iteration stops early: running an iterator to completion
-    /// releases it, and calling this afterwards is not allowed. The typed loops in
-    /// `Query.each` handle both cases.
+    /// releases it, and calling this afterwards is not allowed. `Iterator` below — and
+    /// `QueryOf.Iterator`, which wraps it — track which happened, so `defer it.deinit()`
+    /// is correct either way; this is the raw call underneath them.
     pub inline fn deinit(self: Iter) void {
         c.ecs_iter_fini(self.raw);
     }
