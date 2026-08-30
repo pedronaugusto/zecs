@@ -195,9 +195,14 @@ Two places where the header's documentation contradicts the implementation:
 - `FLECS_TERM_COUNT_MAX` is 32, `FLECS_EVENT_DESC_MAX` is 8, `FLECS_ID_DESC_MAX` is 32.
   These size public structs, so they are build options that feed both the C and the Zig
   side from one source, and the ABI guard proves the two agree.
-- 1028 symbols are exported: 710 functions and 318 variables. `src/abi_manifest.zig` is
-  generated from the header and holds the list; `zig build abi-manifest-check` fails if
-  it has gone stale, which is what makes a re-vendor that adds API impossible to miss.
+- How many symbols this release exports, and how they split between functions and
+  variables, is recorded in the two generated files rather than here.
+  `src/abi_manifest.zig` is generated from the header by `zig build abi-manifest` and
+  `zig build abi-manifest-check` fails if it has gone stale, which is what makes a
+  re-vendor that adds API impossible to miss. `src/api_tiers.zig` is generated from
+  `src/c/` by `zig build api-tiers` and re-checked by `zig build api-tiers-check`, and
+  carries the counts per tier. A number copied into this file would be a second home for
+  a fact that already has one, and would be stale the first time it was wrong.
 
 ## Re-vendoring procedure
 

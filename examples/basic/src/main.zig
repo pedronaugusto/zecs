@@ -6,6 +6,22 @@
 const std = @import("std");
 const zecs = @import("zecs");
 
+/// flecs's header, reached directly — the route for anything the raw layer does not
+/// declare. It works here because `build.zig` links the library the package builds, and
+/// that library installs `flecs.h`.
+///
+/// The two `_FORTIFY_SOURCE` lines are not about flecs. MinGW turns on its fortified
+/// `wcscat`/`wcscpy` when the macro is set, which an optimized build sets, and Zig's
+/// translate-c emits those two as unused local constants and then refuses its own
+/// output. Any `@cImport` of any header that reaches `<string.h>` hits it on
+/// x86_64-windows-gnu in a release build. Undefining it costs a consumer nothing: it
+/// affects only the declarations translate-c reads, never the compiled library.
+const flecs_h = @cImport({
+    @cUndef("_FORTIFY_SOURCE");
+    @cDefine("_FORTIFY_SOURCE", "0");
+    @cInclude("flecs.h");
+});
+
 const Position = struct { x: f32, y: f32 };
 const Velocity = struct { x: f32, y: f32 };
 
@@ -75,4 +91,13 @@ pub fn main() !void {
     // flecs exports is declared, under its own name.
     const info = zecs.c.world.ecs_get_build_info();
     std.debug.print("flecs {s}\n", .{info.version.?});
+
+    // And the last resort behind that one: the header itself. Both routes have to name
+    // the same version, because they are the same library — if they ever disagree, the
+    // consumer has linked one flecs and is reading another's declarations, which is the
+    // failure this line exists to make loud.
+    const via_header = std.mem.span(flecs_h.ecs_get_build_info().*.version);
+    if (!std.mem.eql(u8, std.mem.span(info.version.?), via_header)) {
+        return error.HeaderAndLibraryDisagree;
+    }
 }

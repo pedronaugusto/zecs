@@ -20,9 +20,18 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
+            .link_libc = true,
             .imports = &.{.{ .name = "zecs", .module = zecs.module("zecs") }},
         }),
     });
+
+    // The escape hatch the README documents, proved instead of asserted. Linking the
+    // library the package builds puts its installed `flecs.h` on this module's include
+    // path, so a consumer can `@cImport` anything the raw layer does not declare. That
+    // is a claim about two build graphs and an install step, which is exactly the kind
+    // of claim that quietly stops being true.
+    exe.root_module.linkLibrary(zecs.artifact("flecs"));
+
     b.installArtifact(exe);
 
     const run = b.addRunArtifact(exe);
