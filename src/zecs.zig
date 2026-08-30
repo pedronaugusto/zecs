@@ -173,6 +173,15 @@ pub const Query = query_mod.Query;
 /// what the derivation covers and what it deliberately refuses.
 pub const QueryOf = query_mod.QueryOf;
 
+/// Sorting and grouping a query's results. `QueryOptions.order_by` and `.group_by` take
+/// the descriptors; these build the C callbacks they hold out of ordinary Zig functions.
+pub const OrderBy = types.OrderBy;
+pub const GroupBy = types.GroupBy;
+pub const orderBy = query_mod.orderBy;
+pub const orderByEntity = query_mod.orderByEntity;
+pub const orderByEntityId = query_mod.orderByEntityId;
+pub const groupBy = query_mod.groupBy;
+
 /// The spec markers. A bare handle is a read-write term; these are the rest.
 pub const in = terms_mod.in;
 pub const out = terms_mod.out;

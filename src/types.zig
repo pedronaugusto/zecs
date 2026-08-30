@@ -313,6 +313,48 @@ pub const Term = struct {
     }
 };
 
+/// Sorting a query's results.
+///
+/// Sorting is a property of the CACHE, so asking for it makes the query cached whatever
+/// `cache_kind` says [read-from-source: `libs/flecs/flecs.c:35949`]. flecs re-sorts when
+/// the matched set changes, not on every iteration.
+pub const OrderBy = struct {
+    /// The component whose values are compared. Zero compares entities alone, and
+    /// `compare` is then handed null pointers — which is what `Query.orderByEntity`
+    /// builds a comparator for.
+    component: Entity = 0,
+
+    /// The comparison. Build one from a Zig function with `Query.orderBy` or
+    /// `Query.orderByEntity` rather than writing the C signature out.
+    compare: c.ecs_order_by_action_t = null,
+
+    /// Sort a whole table in one call instead of element by element. Optional; flecs
+    /// uses its own quicksort over `compare` when this is null.
+    sort_table: c.ecs_sort_table_action_t = null,
+};
+
+/// Grouping a query's results, so that iteration can be restricted to one group.
+///
+/// Like sorting, grouping is a property of the cache and makes the query cached.
+pub const GroupBy = struct {
+    /// The relationship whose target names the group. With no `callback`, flecs uses its
+    /// own: the second element of the `(id, *)` pair the table has
+    /// [read-from-source: `flecs_query_cache_default_group_by`, `libs/flecs/flecs.c:77861`].
+    id: Id = 0,
+
+    /// Derives a group id from a table. Build one with `Query.groupBy`.
+    callback: c.ecs_group_by_action_t = null,
+
+    /// Called the first time a group is populated and when it empties, for a per-group
+    /// context that `Query.groupInfo` hands back.
+    on_create: c.ecs_group_create_action_t = null,
+    on_delete: c.ecs_group_delete_action_t = null,
+
+    /// Passed to all three callbacks.
+    ctx: ?*anyopaque = null,
+    ctx_free: c.ecs_ctx_free_t = null,
+};
+
 /// How a query is evaluated, as distinct from what it matches.
 ///
 /// Split out of `QueryDesc` because a typed query takes exactly this and nothing else:
@@ -328,12 +370,32 @@ pub const QueryOptions = struct {
     /// Context pointer, delivered to callbacks as `Iter.ctx()`.
     ctx: ?*anyopaque = null,
 
+    /// Sort the matched entities. See `OrderBy`.
+    order_by: ?OrderBy = null,
+
+    /// Group the matched tables, so iteration can be restricted to one group with
+    /// `Query.iterGroup`. See `GroupBy`.
+    group_by: ?GroupBy = null,
+
     /// Fills in the evaluation half of a C descriptor.
     pub fn applyTo(self: QueryOptions, desc: *c.ecs_query_desc_t) void {
         desc.cache_kind = @intFromEnum(self.cache_kind);
         desc.flags = self.flags;
         desc.entity = self.entity;
         desc.ctx = self.ctx;
+        if (self.order_by) |o| {
+            desc.order_by = o.component;
+            desc.order_by_callback = o.compare;
+            desc.order_by_table_callback = o.sort_table;
+        }
+        if (self.group_by) |g| {
+            desc.group_by = g.id;
+            desc.group_by_callback = g.callback;
+            desc.on_group_create = g.on_create;
+            desc.on_group_delete = g.on_delete;
+            desc.group_by_ctx = g.ctx;
+            desc.group_by_ctx_free = g.ctx_free;
+        }
     }
 };
 

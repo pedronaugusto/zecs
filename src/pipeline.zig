@@ -30,6 +30,7 @@ const c = @import("c/pipeline.zig");
 const options = @import("zecs_options");
 const types = @import("types.zig");
 const world_mod = @import("world.zig");
+const query_mod = @import("query.zig");
 const Error = @import("error.zig").Error;
 
 const Entity = types.Entity;
@@ -53,10 +54,15 @@ const World = world_mod.World;
 /// ```
 ///
 /// with `order_by` set to compare entity ids, which is what breaks ties between two
-/// systems in the same phase. `QueryDesc` has no `order_by` yet, so a pipeline built
-/// from here orders phases but leaves systems within a phase in table order. Set the
-/// field on the descriptor `toC` returns and call `zecs.c.pipeline.ecs_pipeline_init` directly
-/// when that matters.
+/// systems in the same phase.
+///
+/// **A pipeline with no `order_by` runs the systems of one phase in table order**, which
+/// is an ordering nothing in the program controls and which changes when an unrelated
+/// system is added: two systems in `OnUpdate` that write the same component would then
+/// run in either order from build to build. That is a difference in behaviour, not in the
+/// last bits of a number, so this type does not offer it as a default. `toC` installs
+/// `Query.orderByEntityId` — flecs's own tie-break, which is creation order — whenever
+/// `query.options.order_by` is null. Set that field to sort by something else.
 pub const PipelineDesc = struct {
     /// A name, so the pipeline is legible in an inspector. Taken literally, dots and
     /// all, like every other name in this package.
@@ -70,10 +76,17 @@ pub const PipelineDesc = struct {
     query: types.QueryDesc = .{},
 
     /// Fills in a C descriptor, for the fields this wrapper does not cover.
+    ///
+    /// Supplies the entity-id tie-break when the caller set no ordering — see the note
+    /// on this type. A caller who set one keeps it.
     pub fn toC(self: PipelineDesc, entity: Entity) Error!c.ecs_pipeline_desc_t {
+        var query = self.query;
+        if (query.options.order_by == null) {
+            query.options.order_by = .{ .compare = query_mod.orderByEntityId };
+        }
         return .{
             .entity = entity,
-            .query = try self.query.toC(),
+            .query = try query.toC(),
         };
     }
 };

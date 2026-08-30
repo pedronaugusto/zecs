@@ -84,7 +84,127 @@ pub const Query = struct {
     pub fn cacheKind(self: Query) types.CacheKind {
         return @enumFromInt(self.raw.cache_kind);
     }
+
+    //=========================================================================
+    // Groups
+    //
+    // Only for a query built with `QueryOptions.group_by`. flecs sorts the cache so a
+    // group's tables are contiguous, which is what makes iterating one group a range
+    // rather than a filter.
+    //=========================================================================
+
+    /// Starts an iteration restricted to one group.
+    ///
+    /// flecs requires the group to be set before the first `next` and forbids structural
+    /// changes in between [read-from-source: `ecs_iter_set_group`], so the call is here
+    /// rather than on the iterator: there is no point at which a caller holding one of
+    /// these could legally make it.
+    pub fn iterGroup(self: Query, group_id: u64) Iterator {
+        var it = Iterator{ .raw = c.ecs_query_iter(self.world, self.raw) };
+        c.ecs_iter_set_group(&it.raw, group_id);
+        return it;
+    }
+
+    /// What flecs knows about one group: how many tables it holds, and the context its
+    /// `on_create` callback returned. Null when the group has no tables.
+    pub fn groupInfo(self: Query, group_id: u64) ?*const c.ecs_query_group_info_t {
+        return c.ecs_query_get_group_info(self.raw, group_id);
+    }
 };
+
+//=============================================================================
+// Ordering and grouping
+//
+// flecs takes C function pointers for both. These turn ordinary Zig functions into them,
+// for the same reason `zecs.callback` does: the thunk is generated at compile time and
+// compiles to the C-ABI function that would otherwise be written by hand, while the
+// comparison itself stays ordinary Zig — and returns `std.math.Order` rather than a
+// three-valued `c_int` whose sign convention has to be remembered.
+//=============================================================================
+
+/// A comparator over a component's values, for `OrderBy.compare`.
+///
+/// ```zig
+/// .order_by = .{
+///     .component = depth.asId(),
+///     .compare = zecs.orderBy(Depth, struct {
+///         fn cmp(_: zecs.Entity, a: *const Depth, _: zecs.Entity, b: *const Depth) std.math.Order {
+///             return std.math.order(a.level, b.level);
+///         }
+///     }.cmp),
+/// }
+/// ```
+pub fn orderBy(
+    comptime T: type,
+    comptime compare: fn (e1: types.Entity, a: *const T, e2: types.Entity, b: *const T) std.math.Order,
+) c.ecs_order_by_action_t {
+    return &struct {
+        fn thunk(
+            e1: types.Entity,
+            p1: ?*const anyopaque,
+            e2: types.Entity,
+            p2: ?*const anyopaque,
+        ) callconv(.c) c_int {
+            const a: *const T = @ptrCast(@alignCast(p1.?));
+            const b: *const T = @ptrCast(@alignCast(p2.?));
+            return orderToC(compare(e1, a, e2, b));
+        }
+    }.thunk;
+}
+
+/// A comparator over entities alone, for an `OrderBy` with no `component`. flecs passes
+/// null value pointers in that case, so a comparator built by `orderBy` would fault.
+pub fn orderByEntity(
+    comptime compare: fn (e1: types.Entity, e2: types.Entity) std.math.Order,
+) c.ecs_order_by_action_t {
+    return &struct {
+        fn thunk(
+            e1: types.Entity,
+            p1: ?*const anyopaque,
+            e2: types.Entity,
+            p2: ?*const anyopaque,
+        ) callconv(.c) c_int {
+            _ = p1;
+            _ = p2;
+            return orderToC(compare(e1, e2));
+        }
+    }.thunk;
+}
+
+/// flecs sorts ascending on a negative-zero-positive result, the way `qsort` does.
+inline fn orderToC(order: std.math.Order) c_int {
+    return switch (order) {
+        .lt => -1,
+        .eq => 0,
+        .gt => 1,
+    };
+}
+
+/// Sorts by entity id — creation order, since flecs hands out ids in ascending order
+/// within a world. The comparator flecs's own pipeline uses to break ties between two
+/// systems in the same phase.
+pub const orderByEntityId = orderByEntity(struct {
+    fn cmp(e1: types.Entity, e2: types.Entity) std.math.Order {
+        return std.math.order(e1, e2);
+    }
+}.cmp);
+
+/// Derives a group id from a table, for `GroupBy.callback`. Leave the callback null to
+/// take flecs's own, which groups by the target of the relationship in `GroupBy.id`.
+pub fn groupBy(
+    comptime f: fn (world: *c.ecs_world_t, table: *c.ecs_table_t, id: types.Id, ctx: ?*anyopaque) u64,
+) c.ecs_group_by_action_t {
+    return &struct {
+        fn thunk(
+            world: ?*c.ecs_world_t,
+            table: ?*c.ecs_table_t,
+            id: types.Id,
+            ctx: ?*anyopaque,
+        ) callconv(.c) u64 {
+            return f(world.?, table.?, id, ctx);
+        }
+    }.thunk;
+}
 
 test "the caching policy flecs settles on is the one this type documents" {
     // The claim on `Query` used to be that creating one costs matching and running one
@@ -187,6 +307,11 @@ pub fn QueryOf(comptime Tuple: type) type {
 
         pub fn iter(self: Self) Iterator {
             return .{ .inner = self.query.iter() };
+        }
+
+        /// Iteration restricted to one group. See `Query.iterGroup`.
+        pub fn iterGroup(self: Self, group_id: u64) Iterator {
+            return .{ .inner = self.query.iterGroup(group_id) };
         }
 
         /// Calls `body(ctx, entity, ptr...)` once per matched entity, over every table.
