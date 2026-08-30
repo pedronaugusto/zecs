@@ -50,17 +50,20 @@ const std = @import("std");
 // The raw layer
 //=============================================================================
 
-/// flecs's C API, declared verbatim: `zecs.c.core.ecs_world_t`, `zecs.c.core.ecs_entity_init`,
-/// `zecs.c.core.EcsOnUpdate`. Everything the typed layer is built from, available directly
-/// for the parts it does not cover.
+/// flecs's C API, declared verbatim, one namespace per area — `c.core`, `c.entity`,
+/// `c.query`, `c.meta` and so on. The area is part of the path, so `ecs_new` is
+/// `c.entity.ecs_new` and `EcsOnUpdate` is `c.core.EcsOnUpdate`.
 ///
-/// For anything not declared even there, link the artifact this package builds and
-/// `@cImport` `flecs.h`: the header is installed for exactly that purpose.
-/// The raw flecs declarations, one namespace per area — `c.entity`, `c.query`,
-/// `c.meta` and so on. This is the escape hatch: anything the typed surface
-/// does not wrap is reachable here, ABI-checked, and documented as a
-/// first-class way to call it. The area is part of the path, so `core.ecs_new`
-/// is `c.entity.ecs_new`.
+/// Everything the typed layer is built from, and not a leak: anything the typed surface
+/// does not wrap is reachable here, checked against the real header by
+/// `src/abi_check.zig`, and documented as a first-class way to call it rather than as a
+/// fallback. `src/api_tiers.zig` says which of these declarations are flecs's API and
+/// which are flecs's insides, which have no stability contract across an upstream patch
+/// release.
+///
+/// For anything not declared even here, link the artifact this package builds and
+/// `@cImport` `flecs.h`: the header is installed for exactly that purpose, and
+/// `examples/basic` does it so the route is checked rather than described.
 pub const c = @import("c.zig");
 
 /// Shorthand for the area this file itself happens to need.

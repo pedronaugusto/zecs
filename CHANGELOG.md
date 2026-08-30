@@ -11,10 +11,11 @@ boundary between the two checked by the compiler rather than trusted.
 
 ### The raw layer is complete
 
-`zecs.c` declares all 1028 symbols the vendored flecs exports — every function, variable,
-struct, union, opaque type and callback typedef. Completeness is not a claim in this file:
-`src/abi_manifest.zig` is generated from the header, and the build fails for any export
-nothing binds.
+`zecs.c` declares every symbol the vendored flecs exports — every function, variable,
+struct, union, opaque type and callback typedef — grouped one module per area under
+`src/c/`, with `src/c.zig` as the index the guards walk. Completeness is not a claim in
+this file: `src/abi_manifest.zig` is generated from the header, and the build fails for
+any export nothing binds.
 
 ### Every declaration is checked against the real header
 
@@ -24,9 +25,10 @@ struct fields by name and offset, functions by arity and per-parameter size and
 signedness, macro constants by value, `extern const`s by type. A declaration it cannot
 categorise is a compile error rather than a silent pass.
 
-`ci/mutate.sh` proves the check refuses seventeen kinds of deliberate drift — a field
-swap, a widened parameter, a deleted declaration, a to-do list that lies. A guard that
-passes is otherwise indistinguishable from a guard that checks nothing.
+`ci/mutate.sh` proves the check refuses each kind of deliberate drift it plants — a field
+swap, a widened parameter, a deleted declaration, a to-do list that lies — and scores a
+build that fails for any other reason as a survivor. A guard that passes is otherwise
+indistinguishable from a guard that checks nothing.
 
 ### The typed layer is written to a rule
 
@@ -58,13 +60,13 @@ from four threads.
 
 ### Verified rather than asserted
 
-127 tests. `ci/verify-vendor.sh` fetches the pinned upstream commit and compares it, so
-"unmodified upstream" is checked. `examples/basic` is a separate project depending on this
-one by path, built and run by CI on three platforms, because nothing inside a package can
-prove the package is usable from outside it. CI runs the suite in four optimize modes
-through both allocator paths, across the addon presets and one addon off at a time, and
-cross-compiles eight targets.
+`ci/verify-vendor.sh` fetches the pinned upstream commit and compares it, so "unmodified
+upstream" is checked. `examples/basic` is a separate project depending on this one by
+path, built and run by the workflow on three platforms, because nothing inside a package
+can prove the package is usable from outside it. The workflow runs the suite in four
+optimize modes through both allocator paths, across the addon presets and one addon off
+at a time, and cross-compiles the target list in the README.
 
-`UPSTREAM.md` records twenty upstream flecs behaviours found while binding the whole API,
-so a re-vendor can check whether any have been fixed and the workarounds are not mistaken
+`UPSTREAM.md` records the upstream flecs behaviours found while binding the whole API, so
+a re-vendor can check whether any have been fixed and the workarounds are not mistaken
 for arbitrary defensiveness.
