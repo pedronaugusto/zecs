@@ -75,6 +75,10 @@ run 'zig fmt' zig fmt --check src tests bench tools examples build.zig
 # exactly the moment a re-vendor could add API nobody notices.
 run 'abi manifest is current' zig build abi-manifest-check
 
+# build.zig.zon's `paths` is what a consumer receives. Nothing inside the repository
+# can notice an entry missing from it, because every local build reads the working tree.
+run 'the package ships the repository' ci/verify-package.sh
+
 # src/api_tiers.zig partitions what this package binds into flecs's API and flecs's
 # insides. Stale means a doc that says the wrong thing; a typed-layer call into the
 # insides means a dependency that breaks at the next re-vendor, somewhere no ABI
