@@ -3634,3 +3634,33 @@ test "a handle is accepted by a stage of the world that minted it" {
     const stage = try world.stage(0);
     try std.testing.expect(stage.minted(pos));
 }
+
+test "an iteration in progress notices that it has been copied" {
+    var world = try zecs.World.init();
+    defer world.deinit();
+
+    const position = try world.component(Position, .{});
+    for (0..3) |_| {
+        const e = try world.entity(.{});
+        world.set(e, position, .{ .x = 1, .y = 2 });
+    }
+
+    var it = world.each(position);
+    defer it.deinit();
+
+    // Nothing has been started, so it is still free to be moved — which is what makes
+    // returning one of these by value legal.
+    try std.testing.expect(it.atHome());
+
+    _ = it.next();
+
+    // Now flecs holds a cursor into the stage's iterator stack on its behalf, and a
+    // copy is two owners of it. The copy knows it is not the one that started.
+    var copy = it;
+    try std.testing.expect(it.atHome());
+    try std.testing.expect(!copy.atHome());
+
+    // The copy is the broken one. Put it back where the original is so that nothing
+    // here ends up releasing the same iteration twice.
+    copy.finished = true;
+}

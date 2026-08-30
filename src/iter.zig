@@ -200,15 +200,37 @@ pub fn callback(comptime handler: fn (it: *Iter) void) c.ecs_iter_action_t {
 ///
 /// `advance` is comptime, so the loop calls flecs's iteration function directly rather
 /// than through the function pointer in the struct.
+///
+/// ## Copying one is a bug, and it is checked
+///
+/// Once iteration has started, an `ecs_iter_t` is not a value. It holds a cursor into
+/// the stage's iterator stack (`libs/flecs/flecs.c:13203`) that `ecs_iter_fini` pops,
+/// and `it.ids`, `it.sources`, `it.trs` and `it.columns` point into memory that cursor
+/// owns. flecs treats it that way itself: where it does copy an iterator, it clears the
+/// cursor by hand first — `result.priv_.stack_cursor = NULL; /* Don't copy allocator
+/// cursor */`, flecs.c:13998 and :14103 — and elsewhere it copies only the public half,
+/// `memcpy(it, chain_it, offsetof(ecs_iter_t, priv_))`, flecs.c:14031.
+///
+/// So a copy taken after the first `next()` is two owners of one iteration: each will
+/// pop the same cursor, and advancing one leaves the other reading a table it has been
+/// moved off. Zig cannot forbid a copy, so this asserts against one. The first `next()`
+/// or `deinit()` records the address the iterator is at, and every later call requires
+/// it to still be there — which catches a copy and a move alike, both of which are the
+/// same defect. Before the first `next()` there is nothing to keep in step, so
+/// returning one of these by value is fine and is how they are all built.
 pub fn Iterator(comptime advance: *const fn (*c.ecs_iter_t) callconv(.c) bool) type {
     return struct {
         const Self = @This();
 
         raw: c.ecs_iter_t,
         finished: bool = false,
+        /// Where this iterator was when it was first used. Null until then.
+        home: ?*const Self = null,
 
         /// The next table, or null when there are none left.
         pub fn next(self: *Self) ?Iter {
+            std.debug.assert(self.atHome());
+            self.home = self;
             if (self.finished) return null;
             if (advance(&self.raw)) return Iter{ .raw = &self.raw };
             // flecs released it on the way out.
@@ -218,9 +240,22 @@ pub fn Iterator(comptime advance: *const fn (*c.ecs_iter_t) callconv(.c) bool) t
 
         /// Releases the iterator if the loop did not run to completion.
         pub fn deinit(self: *Self) void {
+            std.debug.assert(self.atHome());
+            self.home = self;
             if (self.finished) return;
             self.finished = true;
             c.ecs_iter_fini(&self.raw);
+        }
+
+        /// Whether this iterator is still where it was first used.
+        ///
+        /// True for one that has not been used yet, which is the only state in which
+        /// moving it is legal. Public and separate from the assertion built on it for
+        /// the usual reason: an assertion cannot be caught, so from inside the language
+        /// a check wired up wrongly and a check that never fires look the same.
+        pub fn atHome(self: *const Self) bool {
+            const home = self.home orelse return true;
+            return home == self;
         }
     };
 }
