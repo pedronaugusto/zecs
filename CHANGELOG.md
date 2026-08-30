@@ -77,6 +77,12 @@ own claims; each one is a defect the previous release shipped.
   also fails if the typed layer calls into the internal tier.
 - **Nothing compiled the benchmark.** A rename in `QueryDesc` left it broken for several
   commits. `zig build bench-compile` runs in CI.
+- **The MSVC ABI was three steps of the local matrix out of forty.** "The suite passes"
+  is a claim about an ABI, not about a machine, and the two Windows ABIs disagree about
+  the width of a C enum — a difference this package had wrong. The arm is now a
+  parameter of the whole roster, `ci/run.sh --target <triple>`, so a step added later
+  cannot be gnu-only by omission; `ci/mutate.sh` takes the same target, and the mutation
+  proof runs on both ABIs in CI.
 
 ### Added
 

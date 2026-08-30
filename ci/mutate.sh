@@ -16,7 +16,14 @@
 # Requires: zig, python3 (the rewrites are python snippets), and a POSIX shell.
 #
 # Usage:
-#   ci/mutate.sh
+#   ci/mutate.sh                            # the host's default ABI
+#   ci/mutate.sh -Dtarget=<triple>          # that ABI instead
+#
+# Any argument given is appended to every build below. The one that matters is
+# `-Dtarget`: the guard compares this package's declarations against `@cImport` of the
+# header *as preprocessed for a target*, so a guard proved to fire on one ABI is not
+# proved to fire on another. C enums are `int` under MSVC and `unsigned int` under gnu,
+# which is a real difference this guard caught and a reason to run the proof on both.
 #
 # Exits non-zero if any mutation survives, after running every case.
 
@@ -63,7 +70,7 @@ SURVIVORS=()
 # compile error by construction, so every defect below is visible the moment the test
 # module is analysed — and a suite that failed to compile has nothing left to run.
 # Seventeen full test runs took seventeen minutes; seventeen compiles take under two.
-DEFAULT_BUILD=(zig build test-compile -Daddons=everything)
+DEFAULT_BUILD=(zig build test-compile -Daddons=everything "$@")
 BUILD=("${DEFAULT_BUILD[@]}")
 
 # apply <path-or-directory> <python-expression-file-rewrite>
@@ -355,7 +362,7 @@ printf '\n%sThe API tiers%s\n' "$BOLD" "$OFF"
 # flecs's insides carry no stability contract, and a typed API standing on one breaks at
 # the next re-vendor somewhere no ABI comparison can reach: the guard compares what is
 # declared, and both sides of a renamed internal move together.
-BUILD=(zig build api-tiers-check)
+BUILD=(zig build api-tiers-check "$@")
 
 mutate 'tiers: the typed layer reaches into flecs' "$WORLD_FILE" '
 s = s.replace("""pub const World = struct {""",

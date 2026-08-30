@@ -13,8 +13,21 @@
 # the whole point of the section.
 #
 # Usage:
-#   ci/run.sh            # the full matrix
-#   ci/run.sh --quick    # native Debug only, for the inner loop
+#   ci/run.sh                    # the full matrix, on the host's default ABI
+#   ci/run.sh --quick            # native Debug only, for the inner loop
+#   ci/run.sh --target <triple>  # the whole roster on ONE target instead
+#
+# `--target` exists because "the suite passes" is a claim about an ABI, not about a
+# machine. On Windows the same host has two of them — the gnu default and MSVC — and
+# they disagree about the width of a C enum, which is a difference the ABI guard is
+# built to catch and did. Running three MSVC steps out of forty and calling the arm
+# covered is the shape of gap this script exists to close, so the arm is a parameter of
+# the roster rather than a section inside it:
+#
+#   ci/run.sh --target native-native-msvc
+#
+# The cross-compilation tier is skipped when a target is pinned: sweeping every target
+# is the entire content of that tier, and pinning one empties it.
 #
 # ci/mutate.sh is part of the full run. It can also be run on its own while working on
 # the ABI guard, which is the only time it usually needs to be.
@@ -26,7 +39,26 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 QUICK=0
-[ "${1:-}" = "--quick" ] && QUICK=1
+TARGET=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --quick)    QUICK=1; shift ;;
+    --target)   TARGET="${2:-}"; shift 2 ;;
+    --target=*) TARGET="${1#--target=}"; shift ;;
+    *) echo "ci/run.sh: unknown argument '$1'" >&2; exit 2 ;;
+  esac
+done
+if [ -n "$TARGET" ]; then
+  TARGET_ARGS=(-Dtarget="$TARGET")
+else
+  TARGET_ARGS=()
+fi
+
+# Every build below goes through these two, so the arm cannot be forgotten by a step
+# added later — which is exactly how the MSVC ABI came to be covered by three steps out
+# of forty. `zig fmt` is deliberately not among them: formatting has no target.
+zbuild() { zig build "${TARGET_ARGS[@]}" "$@"; }
+example() { ( cd examples/basic && zig build run "${TARGET_ARGS[@]}" "$@" ); }
 
 if [ -t 1 ]; then
   RED=$'\033[31m'; GREEN=$'\033[32m'; DIM=$'\033[2m'; BOLD=$'\033[1m'; OFF=$'\033[0m'
@@ -60,7 +92,7 @@ run() {
 
 section() { printf '\n%s%s%s\n' "$BOLD" "$1" "$OFF"; }
 
-printf '%szecs local CI%s  %s%s%s\n' "$BOLD" "$OFF" "$DIM" "$(zig version)" "$OFF"
+printf '%szecs local CI%s  %szig %s, %s%s\n' "$BOLD" "$OFF" "$DIM" "$(zig version)" "${TARGET:-host default ABI}" "$OFF"
 
 #-----------------------------------------------------------------------------
 section 'Hygiene'
@@ -73,7 +105,7 @@ run 'zig fmt' zig fmt --check src tests bench tools examples build.zig
 # src/abi_manifest.zig is generated from the vendored header. If it has gone stale the
 # ABI guard is measuring coverage against a list of what flecs used to export, which is
 # exactly the moment a re-vendor could add API nobody notices.
-run 'abi manifest is current' zig build abi-manifest-check
+run 'abi manifest is current' zbuild abi-manifest-check
 
 # build.zig.zon's `paths` is what a consumer receives. Nothing inside the repository
 # can notice an entry missing from it, because every local build reads the working tree.
@@ -83,16 +115,16 @@ run 'the package ships the repository' ci/verify-package.sh
 # insides. Stale means a doc that says the wrong thing; a typed-layer call into the
 # insides means a dependency that breaks at the next re-vendor, somewhere no ABI
 # comparison can see it.
-run 'api tiers are current' zig build api-tiers-check
+run 'api tiers are current' zbuild api-tiers-check
 
 # The published API reference is generated from the doc comments, so a doc comment that
 # does not compile is a broken reference rather than a cosmetic problem.
-run 'docs generate' zig build docs
+run 'docs generate' zbuild docs
 
 # The benchmark is the only consumer of the public API in this repository that is not a
 # test, and nothing used to compile it — so a rename in QueryDesc left it broken for
 # several commits. Compiled, not run: a run takes minutes and measures the laptop.
-run 'benchmarks compile' zig build bench-compile -Doptimize=ReleaseFast
+run 'benchmarks compile' zbuild bench-compile -Doptimize=ReleaseFast
 
 #-----------------------------------------------------------------------------
 section 'Tests — native'
@@ -101,24 +133,24 @@ section 'Tests — native'
 # The default Debug configuration: flecs's own sanitize-level checks, Zig's C
 # undefined-behaviour sanitizer, and every allocation routed through the injected
 # allocator so the balance-to-zero assertion sees individual objects.
-run 'Debug (sanitize, os_alloc)' zig build test
+run 'Debug (sanitize, os_alloc)' zbuild test
 
 # The release-shaped allocator path, still with the checks on: flecs's block allocator
 # serves small objects from pools, so the bridge sees a different pattern entirely.
-run 'Debug (block allocator)' zig build test -Duse_os_alloc=false
+run 'Debug (block allocator)' zbuild test -Duse_os_alloc=false
 
 if [ $QUICK -eq 0 ]; then
-  run 'ReleaseSafe' zig build test -Doptimize=ReleaseSafe
-  run 'ReleaseFast' zig build test -Doptimize=ReleaseFast
-  run 'ReleaseSmall' zig build test -Doptimize=ReleaseSmall
+  run 'ReleaseSafe' zbuild test -Doptimize=ReleaseSafe
+  run 'ReleaseFast' zbuild test -Doptimize=ReleaseFast
+  run 'ReleaseSmall' zbuild test -Doptimize=ReleaseSmall
 
   # A release build with the allocator routed through the OS API — the configuration a
   # host would use to account for flecs's memory in production.
-  run 'ReleaseFast (os_alloc)' zig build test -Doptimize=ReleaseFast -Duse_os_alloc=true
+  run 'ReleaseFast (os_alloc)' zbuild test -Doptimize=ReleaseFast -Duse_os_alloc=true
 
   # Checks on in an optimized build. Worth its own run because the build has to undo
   # the NDEBUG that Zig defines for release C, and flecs warns if that goes wrong.
-  run 'ReleaseFast (sanitize)' zig build test -Doptimize=ReleaseFast -Ddebug_checks=sanitize
+  run 'ReleaseFast (sanitize)' zbuild test -Doptimize=ReleaseFast -Ddebug_checks=sanitize
 
 #-----------------------------------------------------------------------------
 section 'Tests — build options'
@@ -141,52 +173,52 @@ section 'Tests — build options'
   # likely to be shipped, so it is the one where a test that forgot to gate itself on an
   # addon shows up. `minimal` alone does not catch that: it turns off systems too, so the
   # behaviour suite does not run at all.
-  run 'addons: system+pipeline+meta+log' zig build test \
+  run 'addons: system+pipeline+meta+log' zbuild test \
     -Daddons=minimal -Daddon_system=true -Daddon_pipeline=true \
     -Daddon_meta=true -Daddon_log=true
 
   # One addon off at a time, from a set that has everything else. Each is a configuration
   # where the typed layer must still compile and the tests that need the missing addon
   # must skip rather than fail to link — which is a behavioural claim, so the full suite.
-  run 'addons: no json' zig build test -Daddon_json=false
-  run 'addons: no doc' zig build test -Daddon_doc=false
-  run 'addons: no meta' zig build test -Daddon_meta=false
+  run 'addons: no json' zbuild test -Daddon_json=false
+  run 'addons: no doc' zbuild test -Daddon_doc=false
+  run 'addons: no meta' zbuild test -Daddon_meta=false
 
   # No systems and no pipeline: the behaviour tests cannot run there, the ABI and
   # allocator tests still do.
-  run 'addons: minimal' zig build test -Daddons=minimal
+  run 'addons: minimal' zbuild test -Daddons=minimal
 
   # Every addon on. The only configuration whose header declares every symbol in the ABI
   # manifest, and therefore the only one where the guard's coverage assertions are exact.
-  run 'addons: everything' zig build test -Daddons=everything
+  run 'addons: everything' zbuild test -Daddons=everything
 
   # Behavioural: what flecs trades away, and what it stops counting.
-  run 'low_footprint' zig build test -Dlow_footprint=true
-  run 'disable_counters' zig build test -Ddisable_counters=true
+  run 'low_footprint' zbuild test -Dlow_footprint=true
+  run 'disable_counters' zbuild test -Ddisable_counters=true
 
   # Layout only. These move fields in public structs; the guard is what proves the Zig
   # side moved with them.
-  run 'term_count_max=8' zig build test-unit -Dterm_count_max=8
-  run 'term_count_max=16' zig build test-unit -Dterm_count_max=16
-  run 'term_count_max=64' zig build test-unit -Dterm_count_max=64
-  run 'event_desc_max=4' zig build test-unit -Devent_desc_max=4
-  run 'id_desc_max=8' zig build test-unit -Did_desc_max=8
-  run 'ftime_t=fp64' zig build test-unit -Dftime_t=fp64
-  run 'float_t=fp64' zig build test-unit -Dfloat_t=fp64
-  run 'ftime_t + float_t=fp64' zig build test-unit -Dftime_t=fp64 -Dfloat_t=fp64
-  run 'debug_checks=none' zig build test-unit -Ddebug_checks=none
-  run 'debug_checks=debug' zig build test-unit -Ddebug_checks=debug
-  run 'sparse_page_bits=8' zig build test-unit -Dsparse_page_bits=8
-  run 'entity_page_bits=8' zig build test-unit -Dentity_page_bits=8
-  run 'term_arg_count_max=8' zig build test-unit -Dterm_arg_count_max=8
-  run 'variable_count_max=8' zig build test-unit -Dvariable_count_max=8
-  run 'query_variable_count_max=64' zig build test-unit -Dquery_variable_count_max=64
-  run 'query_scope_nesting_max=4' zig build test-unit -Dquery_scope_nesting_max=4
-  run 'dag_depth_max=16' zig build test-unit -Ddag_depth_max=16
-  run 'hi_component_id=64' zig build test-unit -Dhi_component_id=64
-  run 'hi_id_record_id=64' zig build test-unit -Dhi_id_record_id=64
+  run 'term_count_max=8' zbuild test-unit -Dterm_count_max=8
+  run 'term_count_max=16' zbuild test-unit -Dterm_count_max=16
+  run 'term_count_max=64' zbuild test-unit -Dterm_count_max=64
+  run 'event_desc_max=4' zbuild test-unit -Devent_desc_max=4
+  run 'id_desc_max=8' zbuild test-unit -Did_desc_max=8
+  run 'ftime_t=fp64' zbuild test-unit -Dftime_t=fp64
+  run 'float_t=fp64' zbuild test-unit -Dfloat_t=fp64
+  run 'ftime_t + float_t=fp64' zbuild test-unit -Dftime_t=fp64 -Dfloat_t=fp64
+  run 'debug_checks=none' zbuild test-unit -Ddebug_checks=none
+  run 'debug_checks=debug' zbuild test-unit -Ddebug_checks=debug
+  run 'sparse_page_bits=8' zbuild test-unit -Dsparse_page_bits=8
+  run 'entity_page_bits=8' zbuild test-unit -Dentity_page_bits=8
+  run 'term_arg_count_max=8' zbuild test-unit -Dterm_arg_count_max=8
+  run 'variable_count_max=8' zbuild test-unit -Dvariable_count_max=8
+  run 'query_variable_count_max=64' zbuild test-unit -Dquery_variable_count_max=64
+  run 'query_scope_nesting_max=4' zbuild test-unit -Dquery_scope_nesting_max=4
+  run 'dag_depth_max=16' zbuild test-unit -Ddag_depth_max=16
+  run 'hi_component_id=64' zbuild test-unit -Dhi_component_id=64
+  run 'hi_id_record_id=64' zbuild test-unit -Dhi_id_record_id=64
 
-  run 'shared library' zig build -Dshared=true
+  run 'shared library' zbuild -Dshared=true
 
 #-----------------------------------------------------------------------------
 section 'Example consumer'
@@ -194,8 +226,8 @@ section 'Example consumer'
 
   # A separate project depending on this one by path. Nothing inside the package can
   # prove the package is usable from outside it; only a second build graph can.
-  run 'example builds and runs' sh -c 'cd examples/basic && zig build run'
-  run 'example, ReleaseFast' sh -c 'cd examples/basic && zig build run -Doptimize=ReleaseFast'
+  run 'example builds and runs' example
+  run 'example, ReleaseFast' example -Doptimize=ReleaseFast
 
 #-----------------------------------------------------------------------------
 section 'ABI guard — mutation test'
@@ -204,11 +236,15 @@ section 'ABI guard — mutation test'
   # A guard that passes is indistinguishable from a guard that checks nothing. This
   # introduces one deliberate defect at a time and asserts the build fails. It is the
   # slowest step here, and the only one that measures the tests rather than the code.
-  run 'mutations are all caught' ci/mutate.sh
+  run 'mutations are all caught' ci/mutate.sh "${TARGET_ARGS[@]}"
 
 #-----------------------------------------------------------------------------
 section 'Cross-compilation'
 #-----------------------------------------------------------------------------
+
+if [ -n "$TARGET" ]; then
+  printf '  %sskipped: --target %s pins one arm, and sweeping every arm is this tier%s\n' "$DIM" "$TARGET" "$OFF"
+else
 
   # Two steps per target, because they check different things and only one of them
   # checks any Zig at all.
@@ -238,11 +274,12 @@ section 'Cross-compilation'
   # Windows host — where it is native, and the suite can be run rather than compiled.
   case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*|Windows_NT)
-      run 'MSVC ABI' zig build test -Dtarget=x86_64-windows-msvc
-      run 'MSVC ABI, every addon' zig build test -Daddons=everything -Dtarget=x86_64-windows-msvc
+      run 'MSVC ABI' zbuild test -Dtarget=x86_64-windows-msvc
+      run 'MSVC ABI, every addon' zbuild test -Daddons=everything -Dtarget=x86_64-windows-msvc
       run 'example, MSVC ABI' sh -c 'cd examples/basic && zig build run -Dtarget=x86_64-windows-msvc'
       ;;
   esac
+fi
 fi
 
 #-----------------------------------------------------------------------------
