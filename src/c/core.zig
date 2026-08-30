@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const options = @import("zecs_options");
+const abi = @import("abi.zig");
 const flecs_debug = options.debug_checks == .debug or options.debug_checks == .sanitize;
 const flecs_sanitize = options.debug_checks == .sanitize;
 
@@ -2509,8 +2510,13 @@ pub inline fn ecs_value_pair(rel: ecs_entity_t, val: ecs_entity_t) ecs_id_t {
     return ECS_VALUE_PAIR | ecs_entity_t_comb(val, rel);
 }
 
-/// `va_list`, for the log entry points that take one.
-pub const va_list = std.builtin.VaList;
+/// `va_list`, for the six entry points that take one — as it is PASSED, which on
+/// x86_64 System V is not the object type `std.builtin.VaList` names, and on x86_64
+/// Windows is a type `std` refuses to give at all (zig 0.16.0,
+/// `lib/std/builtin.zig:1053`: `@compileError("disabled due to miscompilations")`).
+/// The derivation and the reasons for all three shapes are in `src/c/abi.zig`, and
+/// `src/abi_check.zig` proves the choice against `@cImport` on the target being built.
+pub const va_list = abi.va_list;
 
 pub const ecs_app_init_action_t = ?*const fn (world: *ecs_world_t) callconv(.c) c_int;
 
