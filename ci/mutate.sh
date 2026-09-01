@@ -25,6 +25,14 @@
 # proved to fire on another. C enums are `int` under MSVC and `unsigned int` under gnu,
 # which is a real difference this guard caught and a reason to run the proof on both.
 #
+# WHICH PUTS ONE RULE ON EVERY CASE BELOW THAT TOUCHES `src/c/abi.zig`: the defect it
+# plants has to be a defect ON EVERY TARGET THE ROSTER RUNS ON. That file answers per
+# target with a `switch`, only the selected arm is compiled, and a mutation of an arm
+# this build does not select is not a weak proof — it is no proof at all, and it scores
+# as a survivor against a guard doing its job. Both cases there obey it now: the enum
+# rule is inverted rather than pinned to one ABI, and the va_list table is replaced
+# rather than edited row by row.
+#
 # Exits non-zero if any mutation survives, after running every case.
 
 set -uo pipefail
@@ -306,8 +314,30 @@ s = s.replace("if (builtin.target.abi == .msvc) c_int else c_uint",
 # `va_list` is compared by what it POINTS AT as well as by width, because every shape it
 # takes is eight bytes wide on the targets where it is a pointer at all. Widening the
 # pointee is the mistake that width alone would miss.
+#
+# THE WHOLE TABLE, and not one row of it, for the same reason the enum case above
+# inverts the rule instead of hard-coding a side. `src/c/abi.zig` answers per target,
+# and a `switch` on the target compiles ONE arm: an edit to an arm this build does not
+# select changes nothing the compiler ever evaluates, so no oracle anywhere can refuse
+# it. The guard compares against `@cImport` for the target being built, and a
+# comptime-dead branch is not part of that build in any form — there is nothing for it
+# to read. Editing only the Windows row therefore made this case a proof on Windows and
+# a guaranteed survivor everywhere else, which is exactly what the ubuntu arm of this
+# job reported the first time it ran: 25 caught, 1 SURVIVED, against a guard that was
+# working.
+#
+# Replacing the table with one wrong pointer is wrong on every target, and wrong in the
+# way this case is about: `[*c]u64` is eight bytes wherever the roster runs, so it gets
+# past the comparison of the parameter itself and is caught ONLY by the comparison of
+# the pointee — `u64` against `u8` on Windows, `u64` against the 24-byte register-save
+# block on System V. (On an aarch64 Linux host, where the ABI passes the object by
+# value rather than a pointer to it, the same edit is caught one rule earlier, by the
+# pointer-against-struct check. Caught is caught; the case is about the pointee on every
+# ABI this job actually runs on.)
 mutate 'abi: the va_list pointee is the wrong type' "$ABI_FILE" '
-s = s.replace(".windows, .uefi => [*c]u8,", ".windows, .uefi => [*c]u64,", 1)
+start = s.index("pub const va_list = switch")
+end = s.index("\n};", start) + len("\n};")
+s = s[:start] + "pub const va_list = [*c]u64;" + s[end:]
 '
 
 # Every pointer on a 64-bit target is eight bytes with eight-byte alignment, so width
