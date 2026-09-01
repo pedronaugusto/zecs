@@ -79,6 +79,15 @@ own claims; each one is a defect the previous release shipped.
   and the one regression its own comment said nothing else catches. The harness also
   understood only one kind of expected signal, so a case needing a different build could
   not be written.
+- **A mutation aimed at one ABI's row of a per-target table.** The case proving the
+  guard refuses a `va_list` whose pointee is wrong corrupted the Windows row of the
+  `switch` in `src/c/abi.zig`. A `switch` on the target compiles one arm, so on a System
+  V target that edit changed nothing the compiler evaluates, nothing could refuse it,
+  and the roster reported a survivor against a guard that was working — 25 caught, 1
+  SURVIVED, the first time the job ran on Linux. The case replaces the whole table now,
+  which is wrong on every target and still caught only by the comparison of the pointee.
+  The rule it broke is written at the top of the script: a case that plants a defect in
+  the per-target file has to plant one that is a defect on every ABI the roster runs on.
 - **Four of flecs's forty OS-API callbacks were routed.** Logging, abort and the
   profiler markers now have Zig handlers too, and `src/memory.zig` is `src/os.zig`,
   named for what it owns.
