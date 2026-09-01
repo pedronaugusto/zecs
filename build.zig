@@ -363,11 +363,27 @@ pub fn build(b: *std.Build) void {
         }
     }.f;
 
-    // Strict C99 sets __STRICT_ANSI__, and glibc then hides everything that is POSIX
-    // rather than ISO C. The HTTP addon calls getnameinfo and uses NI_NUMERICHOST, so
-    // on glibc it stops compiling unless POSIX is asked for explicitly. This is derived
-    // from the addon set rather than hardcoded, so enabling HTTP later brings it along.
-    if (target.result.os.tag == .linux and addons.get(.http)) {
+    // Strict C99 sets `__STRICT_ANSI__`, and a Linux libc then hides everything that is
+    // POSIX rather than ISO C — glibc and musl alike. flecs.c is compiled `-std=c99`
+    // above, so on Linux the POSIX declarations have to be asked for explicitly or they
+    // are not there.
+    //
+    // This is a property of the TARGET AND THE LANGUAGE MODE, not of any addon, and
+    // deriving it from one was the defect: it used to be conditioned on the HTTP addon
+    // because HTTP's `getnameinfo` was the call that first ran into it. But the POSIX
+    // OS API implementation is in every preset this package offers, `minimal` included,
+    // and it calls `clock_gettime` and `nanosleep` and reads `CLOCK_MONOTONIC`. So
+    // every configuration with HTTP switched off failed to compile flecs.c on Linux
+    // while the default configuration — HTTP on, macro present for the wrong reason —
+    // compiled. Measured 2026-09-01 with
+    // `-Daddons=minimal -Daddon_system -Daddon_pipeline -Daddon_meta -Daddon_log`
+    // cross-compiled to x86_64-linux-gnu: five errors at flecs.c:61536, :61552 and
+    // :61584, and none of them anywhere near the HTTP addon.
+    //
+    // Not on Darwin, and that asymmetry is deliberate: Apple's headers expose POSIX
+    // under `__STRICT_ANSI__` on their own, and defining `_POSIX_C_SOURCE` there
+    // *narrows* what is visible rather than widening it.
+    if (target.result.os.tag == .linux) {
         define(&macro_list, b.allocator, "_POSIX_C_SOURCE", "200112L");
     }
 
