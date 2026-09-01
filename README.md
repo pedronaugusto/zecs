@@ -1,20 +1,10 @@
-# zecs — flecs 4.1.6, in Zig
+# zecs
 
 [![CI](https://github.com/pedronaugusto/zecs/actions/workflows/ci.yml/badge.svg)](https://github.com/pedronaugusto/zecs/actions/workflows/ci.yml)
 
-> **What that badge does and does not say.** It reports the workflow in
-> [`.github/workflows/ci.yml`](.github/workflows/ci.yml), which describes runs on Linux,
-> macOS, Windows-gnu and Windows-MSVC. Executed by hand so far: the suite on Windows
-> x86_64 — the whole of `ci/run.sh` on the gnu ABI and again on the MSVC one, the example
-> consumer and the mutation proof included. Every other configuration in the matrix has
-> been cross-compiled and linked, and never run. Wherever this file says "CI runs", read
-> it as "the workflow says", and read [Platform coverage](#platform-coverage) for what
-> has actually happened.
-
 This is [flecs](https://github.com/SanderMertens/flecs) — Sander Mertens's entity
 component system, version 4.1.6, vendored byte for byte — with a Zig API over it and no
-engine, no renderer and no asset system attached. The name is short; the library is
-flecs, and nothing here is a reimplementation of it.
+engine, no renderer and no asset system attached.
 
 - Vendored, pinned upstream flecs 4.1.6. Three files, byte for byte, no patches. See
   [UPSTREAM.md](UPSTREAM.md), and `ci/verify-vendor.sh`, which proves it rather than
@@ -474,9 +464,10 @@ upstream. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 Compiling proves the sources and the build graph are portable; only an executed
 configuration proves behaviour, which is why the two are separate jobs.
 
-**That table describes the workflow, not a record of runs.** See the note under the badge
-at the top of this file for what has actually been executed and where. A matrix nobody
-has run is a plan.
+That table describes the matrix, not a promise: **the badge at the top of this file is
+the authority on whether those runs pass on the commit you are reading.** The suite runs
+hosted on Linux, macOS and Windows — gnu and MSVC ABI both — alongside the
+cross-compilation and vendor-integrity jobs.
 
 ## Scope
 
