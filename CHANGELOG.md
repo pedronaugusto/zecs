@@ -26,6 +26,15 @@ own claims; each one is a defect the previous release shipped.
   which then refuses its own output. Undefined at the `@cImport`.
 - **A test compared a struct's padding byte**, which Zig promises nothing about. It
   passed in Debug and failed in ReleaseFast. It compares fields now.
+- **The ABI guard named every declaration before asking whether this build had one.**
+  Zig emits an extern it has analysed into `.debug_info` whether or not any code calls
+  it; a COFF or Mach-O linker drops that reference and an ELF linker refuses it. So with
+  an addon switched off — including in the default set, where upstream itself leaves
+  journal and script math out — the test binary referenced symbols the library does not
+  define, and `zig build test` failed to link on Linux while passing on Windows and
+  macOS. The guard now settles what this build has before it touches anything: what the
+  header declares, less the names it replaces with macros, less the seven symbols flecs
+  declares unconditionally and defines only under an addon.
 
 ### Fixed — silent wrong answers
 

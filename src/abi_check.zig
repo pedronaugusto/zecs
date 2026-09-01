@@ -154,6 +154,68 @@ fn isMacroInThisBuild(comptime name: []const u8) bool {
     return false;
 }
 
+/// Symbols flecs's HEADER declares whether or not an addon is on, and flecs's SOURCE
+/// defines only when it is. Upstream gates the two sides differently — the declaration
+/// under nothing (or under a different addon), the definition under this one — so
+/// `@hasDecl(h, name)` says the symbol is there and the library has no such symbol.
+///
+/// This matters for exactly one reason, and it is not the comparison: comparing our
+/// declaration against the header's is perfectly valid here and would be right. It is
+/// that NAMING our declaration emits it, and an emitted extern carries a relocation —
+/// from `.debug_info` if from nowhere else — which an ELF link then refuses. So these
+/// are skipped for as long as the library does not define them, exactly as if the
+/// header had gated the declaration too.
+///
+/// The condition is read off the HEADER rather than off `zecs_options`, and that is
+/// deliberate: flecs.h enables an addon's dependencies itself, so `-Daddon_pipeline=false`
+/// with the app addon on still compiles the pipeline. `@hasDecl(h, macro)` is the state
+/// flecs.c was compiled in, which is the question being asked.
+///
+/// Measured 2026-09-01 by preprocessing `libs/flecs/flecs.c` for sixty-eight addon sets
+/// — `everything`, `full`, `minimal`, minimal plus the four addons the build-options job
+/// asks for, each addon removed from `everything`, each removed from `full`, and each
+/// added to `minimal` — and taking, for each, the symbols this package declares that the
+/// header declares and the source does not define. The seven below are the whole of it; nothing else in flecs 4.1.6 has this
+/// shape. `ci/mutate.sh` does not need a case for them: a wrong entry is a link failure
+/// on Linux in the addon jobs, which is where the class was found.
+const defined_when = [_]struct { name: []const u8, macro: []const u8 }{
+    .{ .name = "ecs_frame_begin", .macro = "FLECS_PIPELINE" },
+    .{ .name = "ecs_frame_end", .macro = "FLECS_PIPELINE" },
+    .{ .name = "ecs_logv_", .macro = "FLECS_LOG" },
+    .{ .name = "ecs_print_", .macro = "FLECS_LOG" },
+    .{ .name = "ecs_printv_", .macro = "FLECS_LOG" },
+    .{ .name = "ecs_query_args_parse", .macro = "FLECS_QUERY_DSL" },
+    .{ .name = "flecs_module_path_from_c", .macro = "FLECS_MODULE" },
+};
+
+/// True when `defined_when` says this build's library has no definition for the name,
+/// so that the guard neither compares it nor — the part that matters — names it.
+fn isUndefinedInThisBuild(comptime name: []const u8) bool {
+    for (defined_when) |e| {
+        if (std.mem.eql(u8, e.name, name)) return !@hasDecl(h, e.macro);
+    }
+    return false;
+}
+
+// An entry of `defined_when` that upstream has fixed, or that was misspelled, would
+// silently stop covering anything: it only ever subtracts. With every addon on, both
+// halves of every entry must be present in the header — which is what makes the list a
+// claim about flecs rather than a list of names nobody rechecks.
+comptime {
+    if (every_addon) for (defined_when) |e| {
+        if (!@hasDecl(h, e.name)) {
+            fail("src/abi_check.zig's `defined_when` lists `" ++ e.name ++ "`, and " ++
+                "flecs.h does not declare it with every addon on. Either it was " ++
+                "misspelled or the re-vendor removed it; delete the entry.");
+        }
+        if (!@hasDecl(h, e.macro)) {
+            fail("src/abi_check.zig's `defined_when` gates `" ++ e.name ++ "` on `" ++
+                e.macro ++ "`, which is not defined even with every addon on. That is " ++
+                "not an addon macro flecs has.");
+        }
+    };
+}
+
 fn isUnrepresentable(comptime name: []const u8) bool {
     for (unrepresentable) |u| if (std.mem.eql(u8, u.name, name)) return true;
     return false;
@@ -484,7 +546,6 @@ fn sweepOurs() Counts {
                 continue;
             }
 
-            const Decl = @TypeOf(@field(m, d.name));
             const what = "`" ++ d.name ++ "`";
 
             // An addon that is switched off takes its declarations out of the header
@@ -494,10 +555,32 @@ fn sweepOurs() Counts {
             // compare against, so it is counted and skipped — and the test below
             // insists the count is zero when every addon is on, which is what keeps a
             // misspelling in `c.zig` from disappearing down this path.
-            if (!@hasDecl(h, d.name) or isMacroInThisBuild(d.name)) {
+            //
+            // THIS TEST COMES BEFORE THE DECLARATION IS TOUCHED, and that ordering is
+            // load-bearing rather than tidy. "Unused" means never analysed: naming a
+            // declaration at all — `@TypeOf(@field(m, d.name))` is enough, comptime or
+            // not — makes the compiler emit it, and an analysed extern carries a
+            // relocation from `.debug_info` even when no code calls it. A COFF or
+            // Mach-O linker drops that reference; ELF refuses the link. So a sweep that
+            // touched every declaration first and asked about the addon second built
+            // only on two of the three object formats — measured 2026-09-01, where
+            // `zig build test` under the default addon set failed on Linux with three
+            // undefined symbols (`FlecsScriptMathImport`, `flecs_journal_get_counter`,
+            // `FLECS_IDEcsScriptRngID_`: the script_math and journal addons, which
+            // upstream leaves out of its own default build) and passed on Windows and
+            // macOS. The rule this file has to keep is therefore stronger than it
+            // looks: OUTSIDE `every_addon`, NOTHING HERE MAY NAME A DECLARATION WHOSE
+            // COUNTERPART THIS BUILD'S HEADER DOES NOT HAVE.
+            if (!@hasDecl(h, d.name) or isMacroInThisBuild(d.name) or
+                isUndefinedInThisBuild(d.name))
+            {
                 n.addon_absent += 1;
                 continue;
             }
+
+            // Past this point the header has the counterpart, so the library has the
+            // definition and naming our side is free.
+            const Decl = @TypeOf(@field(m, d.name));
 
             // ---- types -----------------------------------------------------
             if (Decl == type) {
@@ -673,6 +756,19 @@ fn coverOne(comptime kind: Kind, comptime name: []const u8, n: *Coverage) void {
                 "with no definition links only for as long as nothing references it, " ++
                 "and the link test below references every one.");
         }
+        // Nothing this build's library defines under this name: the addon that carries
+        // it is off, so the header either dropped the declaration, replaced it with a
+        // macro, or — the case `defined_when` covers — kept it while flecs.c dropped the
+        // definition. Counted and skipped for the same reason, and in the same order, as
+        // in `sweepOurs`: the kind check below NAMES our declaration, and naming it is
+        // what emits the extern reference an ELF link then refuses. The manifest is
+        // generated at the `everything` preset, so it lists every symbol of every addon
+        // and this line is the whole of what keeps a smaller build linkable.
+        if (!@hasDecl(h, name) or isMacroInThisBuild(name) or isUndefinedInThisBuild(name)) {
+            n.addon_absent += 1;
+            return;
+        }
+
         // The name existing is not enough. flecs exports a function called
         // `ecs_id_is_pair` *and* defines a macro called `ECS_IS_PAIR`, and it would be
         // easy to satisfy this sweep with a Zig rewrite of the macro under the
