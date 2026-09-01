@@ -35,6 +35,12 @@ own claims; each one is a defect the previous release shipped.
   macOS. The guard now settles what this build has before it touches anything: what the
   header declares, less the names it replaces with macros, less the seven symbols flecs
   declares unconditionally and defines only under an addon.
+- **`_POSIX_C_SOURCE` was derived from the HTTP addon.** flecs.c is compiled `-std=c99`,
+  which sets `__STRICT_ANSI__`, and a Linux libc then hides everything POSIX; HTTP's
+  `getnameinfo` was only the first call to notice. flecs's POSIX OS API implementation
+  is in every preset and calls `clock_gettime` and `nanosleep`, so every addon set
+  without HTTP failed to compile flecs.c on Linux. The macro follows the target now,
+  which is what it is a property of.
 
 ### Fixed — silent wrong answers
 
