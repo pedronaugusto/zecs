@@ -3,8 +3,7 @@
 [![CI](https://github.com/pedronaugusto/zecs/actions/workflows/ci.yml/badge.svg)](https://github.com/pedronaugusto/zecs/actions/workflows/ci.yml)
 
 This is [flecs](https://github.com/SanderMertens/flecs) — Sander Mertens's entity
-component system, version 4.1.6, vendored byte for byte — with a Zig API over it and no
-engine, no renderer and no asset system attached.
+component system, version 4.1.6, vendored byte for byte — with a Zig API over it.
 
 - Vendored, pinned upstream flecs 4.1.6. Three files, byte for byte, no patches. See
   [UPSTREAM.md](UPSTREAM.md), and `ci/verify-vendor.sh`, which proves it rather than
