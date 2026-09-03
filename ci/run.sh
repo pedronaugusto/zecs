@@ -111,6 +111,10 @@ run 'abi manifest is current' zbuild abi-manifest-check
 # can notice an entry missing from it, because every local build reads the working tree.
 run 'the package ships the repository' ci/verify-package.sh
 
+# CI runs the scripts in ci/ by path. One committed without its executable bit
+# fails there and nowhere else, because every local runner invokes bash first.
+run 'every committed script is executable' ci/check-executable.sh
+
 # src/api_tiers.zig partitions what this package binds into flecs's API and flecs's
 # insides. Stale means a doc that says the wrong thing; a typed-layer call into the
 # insides means a dependency that breaks at the next re-vendor, somewhere no ABI
