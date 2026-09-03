@@ -19,21 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Third-party code distributed with this package
-----------------------------------------------
-
-`libs/flecs` is a verbatim copy of flecs, vendored rather than fetched (see
-UPSTREAM.md). It is not covered by the copyright above. flecs is distributed
-under its own MIT licence:
-
-    Copyright (c) 2025 Sander Mertens
-
-    Portions Copyright (c) Meta Platforms, Inc. and affiliates
-
-The full text ships with this package as `libs/flecs/LICENSE`, and the second
-line of it is the reason this notice exists: flecs carries a contribution whose
-copyright is not its author's, and a licence file that named only him would be
-an incomplete notice for the bytes in this repository.
