@@ -282,6 +282,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: ci/verify-package.sh
+      - run: ci/check-executable.sh
 
   # Proves libs/ is still a pristine copy of the pinned upstream commit, rather than a
   # claim in a markdown file. Needs network, so it is its own job and is not part of
