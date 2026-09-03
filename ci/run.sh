@@ -115,6 +115,10 @@ run 'the package ships the repository' ci/verify-package.sh
 # fails there and nowhere else, because every local runner invokes bash first.
 run 'every committed script is executable' ci/check-executable.sh
 
+# This file's header says it mirrors .github/workflows/ci.yml. Held rather
+# than stated: the two must build the same set of -D option combinations.
+run 'ci/run.sh mirrors the workflow' ci/check-mirror.sh
+
 # src/api_tiers.zig partitions what this package binds into flecs's API and flecs's
 # insides. Stale means a doc that says the wrong thing; a typed-layer call into the
 # insides means a dependency that breaks at the next re-vendor, somewhere no ABI
