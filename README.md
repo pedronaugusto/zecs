@@ -532,4 +532,13 @@ Issues and pull requests are welcome. Two things to know before opening one:
 
 ## Licence
 
-MIT, see [LICENSE](LICENSE). Vendored flecs is MIT, copyright Sander Mertens.
+MIT, see [LICENSE](LICENSE), which covers this package's own code and not
+`libs/flecs`.
+
+`libs/flecs` is a verbatim copy of flecs, vendored rather than fetched (see
+[UPSTREAM.md](UPSTREAM.md)), and is distributed under its own MIT licence:
+copyright Sander Mertens, with portions copyright Meta Platforms, Inc. and
+affiliates. The full text ships with the package as `libs/flecs/LICENSE`, and
+that second holder is why this notice names two rather than one -- flecs carries
+a contribution whose copyright is not its author's, and a notice naming only him
+would be incomplete for the bytes in this repository.
