@@ -9,7 +9,7 @@
 // and read by nothing — so this says it where a reader will actually see it.
 .{
     .name = .zecs,
-    .version = "0.2.0",
+    .version = "0.3.0",
     .minimum_zig_version = "0.16.0",
     .fingerprint = 0xec068ecdd3bee17e,
     .paths = .{
