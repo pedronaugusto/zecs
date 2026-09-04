@@ -199,6 +199,7 @@ pub const Script = struct {
     }
 
     pub fn deinit(self: Script) void {
+        requireAddon();
         c.ecs_script_free(self.raw);
     }
 
@@ -281,6 +282,7 @@ pub const Vars = struct {
     }
 
     pub fn deinit(self: Vars) void {
+        requireAddon();
         c.ecs_script_vars_fini(self.raw);
     }
 
@@ -362,6 +364,7 @@ pub fn Expr(comptime T: type) type {
         }
 
         pub fn deinit(self: Self) void {
+            requireAddon();
             c.ecs_script_free(self.raw);
         }
 

@@ -194,6 +194,14 @@ pub fn typeId(world: World, comptime T: type) Error!Entity {
 //=============================================================================
 
 fn typeEntity(world: *c.ecs_world_t, comptime T: type) Error!Entity {
+    // Guarded here as well as in `define`, because this is the half `typeId` reaches
+    // first: a primitive's entity is a linked symbol the meta addon defines, and
+    // `EcsType` below is another, so both are gone from a build without it.
+    if (comptime !options.addon_meta) @compileError(
+        "zecs.meta needs flecs's meta addon, which this build left out. " ++
+            "Build zecs with -Daddon_meta, or with an addon preset that includes it.",
+    );
+
     if (comptime primitiveOf(T)) |p| return p.builtinId();
 
     const name = comptime component_mod.defaultName(T);

@@ -37,7 +37,7 @@
 //! every target this package supports, and flecs stores component data in these blocks.
 //! A component containing a SIMD vector has to land aligned without being asked for.
 //!
-//! ## Installing it, and the two ways that goes wrong
+//! ## Installing it, and the three ways that goes wrong
 //!
 //! flecs will accept an allocator at a point where accepting it is not safe, so the
 //! guards here are the interesting part rather than the bridge itself:
@@ -50,8 +50,13 @@
 //!   than a silent no-op: with the OS API implementation addon compiled in, which is
 //!   the default, a late call succeeds and swaps the allocator while flecs holds live
 //!   blocks from the previous one.
+//! - Replacing the allocator while flecs still holds blocks is refused. A world going
+//!   away is not the end of flecs's memory: the strings it hands back are freed through
+//!   the same `free_` callback, and a host may still be holding one. So the live-block
+//!   count is kept in every build rather than only where the statistics are, and the
+//!   swap is refused while it is non-zero.
 //!
-//! Both are errors, not assertions, because a host that gets its start-up order wrong
+//! All three are errors, not assertions, because a host that gets its start-up order wrong
 //! deserves a diagnosis rather than a crash in a release build.
 //!
 //! ## Scope
@@ -116,24 +121,36 @@ var callbacks_installed: bool = false;
 /// `setAllocator` believes no world exists and swaps the allocator under a live one.
 var worlds_alive: std.atomic.Value(usize) = .init(0);
 
-/// Live bytes and blocks. Only maintained when `-Dtrack_allocations` is on, which
-/// defaults to Debug: in a release build these are not compiled at all, so the bridge
-/// carries no atomics on the allocation path.
-var live_bytes: std.atomic.Value(usize) = .init(0);
+/// Blocks flecs is holding right now.
+///
+/// Maintained in every build, and not as a statistic: `setAllocator` refuses to replace
+/// the allocator while this is non-zero, and that refusal is the only thing between a
+/// host still holding a flecs-owned string and a free through an allocator that never
+/// allocated it. A guard compiled out of release builds is not a guard.
+///
+/// The cost is one relaxed read-modify-write on each side of an allocation that reached
+/// the OS API at all. In a release build most of flecs's small objects never do — they
+/// come from its own block allocator, and this bridge sees the pools rather than the
+/// objects — so the counter is not on the path an ECS spends its time in.
 var live_blocks: std.atomic.Value(usize) = .init(0);
+
+/// The numbers `stats` reports and nothing in this package acts on. Only maintained when
+/// `-Dtrack_allocations` is on, which defaults to Debug: in a release build these two are
+/// not compiled at all.
+var live_bytes: std.atomic.Value(usize) = .init(0);
 var total_allocations: std.atomic.Value(usize) = .init(0);
 
 inline fn noteAllocated(total: usize) void {
+    _ = live_blocks.fetchAdd(1, .monotonic);
     if (comptime !options.track_allocations) return;
     _ = live_bytes.fetchAdd(total, .monotonic);
-    _ = live_blocks.fetchAdd(1, .monotonic);
     _ = total_allocations.fetchAdd(1, .monotonic);
 }
 
 inline fn noteFreed(total: usize) void {
+    _ = live_blocks.fetchSub(1, .monotonic);
     if (comptime !options.track_allocations) return;
     _ = live_bytes.fetchSub(total, .monotonic);
-    _ = live_blocks.fetchSub(1, .monotonic);
 }
 
 //=============================================================================
@@ -229,8 +246,15 @@ pub fn setAllocator(gpa: std.mem.Allocator) Error!void {
         if (comptime !options.disable_counters) {
             if (flecsAllocationCount() != 0) return Error.FlecsAlreadyAllocated;
         }
-    } else if (comptime options.track_allocations) {
-        if (live_blocks.load(.monotonic) != 0) return Error.AllocationsOutstanding;
+    } else if (live_blocks.load(.monotonic) != 0) {
+        // Blocks flecs handed out outlive the world that made them: a `zecs.Str`, a path
+        // from `ecs_get_path_w_sep`, a string from the json or doc module, anything a
+        // `zecs.strbuf.Owned` still holds. All of them free through `free_`, which is
+        // `release` below, which frees through whatever `installed` is at that moment —
+        // so replacing it while one is alive is a free through an allocator that never
+        // allocated the block. Checked in every build, because that is the only kind of
+        // build a host ships.
+        return Error.AllocationsOutstanding;
     }
 
     installed = gpa;
@@ -540,6 +564,37 @@ test "realloc of a null block allocates" {
 
     const block = reallocate(null, 128) orelse return error.AllocationFailed;
     release(block);
+}
+
+test "a block flecs still holds refuses a change of allocator in any build" {
+    // The precondition `setAllocator` documents, checked in whatever configuration this
+    // build is: the block count it reads is compiled in unconditionally, because the
+    // strings flecs hands back outlive the world that made them and a host holding one
+    // across a swap would free it through an allocator that never allocated it.
+    const worlds_before = worlds_alive.load(.monotonic);
+    const callbacks_before = callbacks_installed;
+    defer {
+        worlds_alive.store(worlds_before, .monotonic);
+        callbacks_installed = callbacks_before;
+    }
+    worlds_alive.store(0, .monotonic);
+    // The branch under test is the one taken once flecs is already calling this bridge;
+    // the first-install path has flecs's own counters to consult instead.
+    callbacks_installed = true;
+
+    installed = testing.allocator;
+    const block = allocate(64) orelse return error.AllocationFailed;
+
+    try testing.expectError(
+        Error.AllocationsOutstanding,
+        setAllocator(std.heap.c_allocator),
+    );
+    // Refused means nothing changed, which is what makes freeing the block below correct
+    // rather than lucky: `installed` is still the allocator that served it.
+    release(block);
+
+    // And the refusal is about the block rather than about swapping at all.
+    try setAllocator(testing.allocator);
 }
 
 test "a log handler receives what flecs would have printed" {

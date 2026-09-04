@@ -275,7 +275,7 @@ pub fn build(b: *std.Build) void {
     const track_allocations = b.option(
         bool,
         "track_allocations",
-        "Count bytes and blocks handed to flecs (default: Debug only)",
+        "Report the bytes and blocks handed to flecs at runtime (default: Debug only)",
     ) orelse is_debug;
 
     const keep_assert = b.option(

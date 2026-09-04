@@ -54,11 +54,17 @@ else
   TARGET_ARGS=()
 fi
 
+# TARGET_ARGS is expanded as `${TARGET_ARGS[@]+"${TARGET_ARGS[@]}"}` everywhere below, and
+# an expansion added later has to be too: bash 3.2, still the system shell on macOS, reads
+# the plain `"${TARGET_ARGS[@]}"` of an EMPTY array as an unset variable under `set -u` and
+# kills the step. bash 4.4 and later do not, so the plain spelling passes every hosted run
+# and fails every local run that pins no target — the majority of them.
+
 # Every build below goes through these two, so the arm cannot be forgotten by a step
 # added later — which is exactly how the MSVC ABI came to be covered by three steps out
 # of forty. `zig fmt` is deliberately not among them: formatting has no target.
-zbuild() { zig build "${TARGET_ARGS[@]}" "$@"; }
-example() { ( cd examples/basic && zig build run "${TARGET_ARGS[@]}" "$@" ); }
+zbuild() { zig build ${TARGET_ARGS[@]+"${TARGET_ARGS[@]}"} "$@"; }
+example() { ( cd examples/basic && zig build run ${TARGET_ARGS[@]+"${TARGET_ARGS[@]}"} "$@" ); }
 
 if [ -t 1 ]; then
   RED=$'\033[31m'; GREEN=$'\033[32m'; DIM=$'\033[2m'; BOLD=$'\033[1m'; OFF=$'\033[0m'
@@ -86,7 +92,10 @@ run() {
     printf '%sFAILED%s %s(%ds)%s\n' "$RED" "$OFF" "$DIM" "$elapsed" "$OFF"
     FAILED=$((FAILED + 1))
     FAILED_NAMES+=("$name")
-    printf '%s' "$output" | sed 's/^/      | /' | head -40
+    # `$(...)` strips every trailing newline, so the diagnostic needs one put back: without
+    # it the last line of a failing step runs into the next step's name and status, and the
+    # status of the step after a failure is the one thing a reader wants next.
+    printf '%s\n' "$output" | sed 's/^/      | /' | head -40
   fi
 }
 
@@ -244,7 +253,7 @@ section 'ABI guard — mutation test'
   # A guard that passes is indistinguishable from a guard that checks nothing. This
   # introduces one deliberate defect at a time and asserts the build fails. It is the
   # slowest step here, and the only one that measures the tests rather than the code.
-  run 'mutations are all caught' ci/mutate.sh "${TARGET_ARGS[@]}"
+  run 'mutations are all caught' ci/mutate.sh ${TARGET_ARGS[@]+"${TARGET_ARGS[@]}"}
 
 #-----------------------------------------------------------------------------
 section 'Cross-compilation'

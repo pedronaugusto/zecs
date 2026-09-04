@@ -4,6 +4,62 @@ All notable changes to this package. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this package uses
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed — guards that were not guarding
+
+- **`setAllocator` kept its own precondition only in a Debug build.** The refusal that
+  stops the allocator being replaced while flecs still holds blocks sat behind
+  `-Dtrack_allocations`, which defaults to Debug, while the precondition it documents was
+  stated unconditionally — and flecs-owned memory outlives the world that made it. A
+  `zecs.Str`, a path, a string from the json or the doc module, anything a
+  `zecs.strbuf.Owned` still holds: all of them are freed through the same OS API
+  callback. So a release build let a host that was still holding one across
+  `resetAllocator()` pass the world check, skip the block check, and free a block through
+  an allocator that never allocated it. The live-block count is now kept in every build:
+  one relaxed read-modify-write on each side of an allocation that reached the OS API at
+  all, which in a release build is the pools flecs's own block allocator refills rather
+  than the objects it serves from them. `-Dtrack_allocations` now governs only the
+  numbers `zecs.allocationStats` reports.
+- **Sixteen entry points reached a flecs symbol their addon compiles and did not say
+  so.** Every other addon-dependent entry point in the package refuses at compile time
+  and names the addon to build with; these sixteen left the host with an undefined symbol
+  from the linker instead, with nothing in it pointing at the addon that was switched
+  off. Each now carries the same refusal: `stats.PipelineStats.deinit`,
+  `stats.MetricKind.id`, `stats.Severity.id` (and with it `MetricDesc.toC` and
+  `AlertDesc.toC`, which read those entities), `app.restComponent`,
+  `app.RestServer.deinit`, `script.Script.deinit`, `script.Vars.deinit`,
+  `script.Expr(T).deinit`, `meta.typeId`, `World.progress`, `World.run`,
+  `World.setThreads`, `World.setTaskThreads`, `World.frame`, `World.Frame.end` and
+  `World.system`. The pattern they share is a pair split down the middle — a `sample`,
+  an `init` or a `parse` that refused, next to the `deinit` that did not.
+- **`ci/mutate.sh` proves each of those refusals is reached** rather than merely written,
+  the same way it proves the ones in the typed layer: sixteen cases that plant the call
+  the gate exists to refuse, built against `-Daddons=minimal`, each requiring the build
+  to fail with the addon's name. A link error where a named refusal was expected is
+  scored as a survivor, because that is precisely what a missing gate produces.
+- **`ci/run.sh` ran none of its build steps on a bash 3.2 host.** Every build in the
+  roster goes through one wrapper, which expands an array holding the pinned `-Dtarget` —
+  empty unless `--target` was given, which is how the roster is usually run. bash 3.2
+  counts the expansion of an empty array as an unset variable under `set -u`, so every
+  step that builds anything reported a failure in zero seconds: the native tier, the
+  option tier, the shared library, both example-consumer builds, and the mutation proof.
+  bash 4.4 and later read that expansion as zero words, which is why the hosted matrix
+  was unaffected while the pre-push runner on macOS's system shell proved nothing. Every
+  expansion of the array now carries the guard both shells agree on, and a failing step's
+  diagnostic ends in a newline rather than in the next step's name.
+
+### Documentation
+
+`UPSTREAM.md` said `-D_POSIX_C_SOURCE=200112L` is added when the target is Linux *and*
+the HTTP addon is in the selected set, and that it follows the computed addon set. It
+follows the target, and has since 0.2.0 — conditioning it on HTTP was the defect that
+release fixed, because flecs's POSIX OS API implementation calls `clock_gettime` and
+`nanosleep` in every addon preset. The document now records the target-and-language-mode
+reasoning `build.zig` carries, including why Darwin is excluded. It is the one platform
+where that macro decides whether the library compiles at all, so a re-vendorer reading
+the old sentence was being told the opposite of what the build does.
+
 ## 0.2.0
 
 A correctness release. Everything below was found by reviewing the package against its

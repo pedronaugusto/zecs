@@ -139,7 +139,13 @@ pub const Rest = struct {
 ///
 /// Zero until the rest module has been imported, which `World.init` does and
 /// `World.initMinimal` does not.
+///
+/// Needs the rest addon: the id is a linked symbol flecs only defines with it.
 pub inline fn restComponent() Component(c.EcsRest) {
+    if (comptime !options.addon_rest) @compileError(
+        "zecs.app.restComponent needs the rest addon: build with -Daddon_rest=true",
+    );
+
     // No world: `FLECS_IDEcsRestID_` is a process-global that the Rest module writes
     // when it is imported, so the id is not any one world's to have minted, and
     // `World.owns` has nothing to compare it against.
@@ -233,7 +239,13 @@ pub const RestServer = struct {
 
     /// Stops the server if it was started, and frees it. Must not be used on a server
     /// flecs owns through the `EcsRest` component.
+    ///
+    /// Needs the rest addon, like `init`: `ecs_rest_server_fini` is only compiled into
+    /// flecs with it.
     pub fn deinit(self: RestServer) void {
+        if (comptime !options.addon_rest) @compileError(
+            "zecs.app.RestServer needs the rest addon: build with -Daddon_rest=true",
+        );
         c.ecs_rest_server_fini(self.raw);
     }
 };
