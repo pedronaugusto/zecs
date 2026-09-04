@@ -22,6 +22,10 @@ const iter_mod = @import("iter.zig");
 const query_mod = @import("query.zig");
 const terms_mod = @import("terms.zig");
 const system_mod = @import("system.zig");
+// Named `build_options` rather than `options` as elsewhere in the package: the query
+// entry points below take a `types.QueryOptions` parameter that is already called that,
+// and Zig refuses a parameter that shadows a declaration.
+const build_options = @import("zecs_options");
 const observer_mod = @import("observer.zig");
 const Error = @import("error.zig").Error;
 
@@ -88,12 +92,22 @@ pub const World = struct {
     ///
     /// Returns false once `quit` has been called. A `delta_time` of zero asks flecs to
     /// measure the frame itself.
+    ///
+    /// Needs the pipeline addon: `ecs_progress` is compiled into flecs only with it.
     pub fn progress(self: World, delta_time: c.ecs_ftime_t) bool {
+        if (comptime !build_options.addon_pipeline) @compileError(
+            "zecs.World.progress needs the pipeline addon: build with -Daddon_pipeline=true",
+        );
         return c.ecs_progress(self.raw, delta_time);
     }
 
     /// Runs one system, outside the pipeline.
+    ///
+    /// Needs the system addon.
     pub fn run(self: World, target: Entity, delta_time: c.ecs_ftime_t, param: ?*anyopaque) Entity {
+        if (comptime !build_options.addon_system) @compileError(
+            "zecs.World.run needs the system addon: build with -Daddon_system=true",
+        );
         return c.ecs_run(self.raw, target, delta_time, param);
     }
 
@@ -104,12 +118,23 @@ pub const World = struct {
     /// `SystemDesc.multi_threaded`.
     ///
     /// If an allocator was installed, it will be called from these threads.
+    ///
+    /// Needs the pipeline addon too: it is the pipeline that owns the worker threads,
+    /// and `ecs_set_threads` is compiled into flecs with it.
     pub fn setThreads(self: World, threads: i32) void {
+        if (comptime !build_options.addon_pipeline) @compileError(
+            "zecs.World.setThreads needs the pipeline addon: build with -Daddon_pipeline=true",
+        );
         c.ecs_set_threads(self.raw, threads);
     }
 
     /// Like `setThreads`, but the threads only exist while a frame is running.
+    ///
+    /// Needs the pipeline addon.
     pub fn setTaskThreads(self: World, task_threads: i32) void {
+        if (comptime !build_options.addon_pipeline) @compileError(
+            "zecs.World.setTaskThreads needs the pipeline addon: build with -Daddon_pipeline=true",
+        );
         c.ecs_set_task_threads(self.raw, task_threads);
     }
 
@@ -132,6 +157,9 @@ pub const World = struct {
     /// `delta_time` work; skipping it leaves those reading zero. Since it has to be
     /// paired with `ecs_frame_end` and the pairing is what `progress` does internally,
     /// the pair is a scope here rather than two calls to keep straight by hand.
+    ///
+    /// Both halves need the pipeline addon: the frame is the pipeline's, and flecs
+    /// compiles neither function without it.
     pub const Frame = struct {
         world: *c.ecs_world_t,
         /// The delta time flecs will pass to systems: the value handed to `frame`, or
@@ -142,6 +170,9 @@ pub const World = struct {
         /// Ends the frame. Doing it twice is not allowed by flecs, so the second call
         /// is ignored and `defer` is safe on an error path.
         pub fn end(self: *Frame) void {
+            if (comptime !build_options.addon_pipeline) @compileError(
+                "zecs.World.Frame needs the pipeline addon: build with -Daddon_pipeline=true",
+            );
             if (!self.open) return;
             self.open = false;
             c.ecs_frame_end(self.world);
@@ -152,6 +183,9 @@ pub const World = struct {
     ///
     /// Only from the thread that owns the world.
     pub fn frame(self: World, delta_time: c.ecs_ftime_t) Frame {
+        if (comptime !build_options.addon_pipeline) @compileError(
+            "zecs.World.frame needs the pipeline addon: build with -Daddon_pipeline=true",
+        );
         return .{
             .world = self.raw,
             .delta_time = c.ecs_frame_begin(self.raw, delta_time),
@@ -1123,7 +1157,14 @@ pub const World = struct {
         return .{ .raw = c.ecs_each_id(self.raw, id) };
     }
 
+    /// Creates a system.
+    ///
+    /// Needs the system addon: `ecs_system_init` is compiled into flecs only with it.
     pub fn system(self: World, desc: system_mod.SystemDesc) Error!Entity {
+        if (comptime !build_options.addon_system) @compileError(
+            "zecs.World.system needs the system addon: build with -Daddon_system=true",
+        );
+
         // The descriptor is validated before the entity is created, so a rejected
         // descriptor does not leave a stray named entity in the world.
         var c_desc = try desc.toC(0);

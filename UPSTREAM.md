@@ -39,16 +39,24 @@ use the library, and `build.zig` supersedes every build system among it.
 This package compiles flecs as strict C99. One consequence is worth recording, because
 it is not obvious and it only appears on one platform:
 
-**glibc hides POSIX declarations under `-std=c99`.** Strict-conformance mode defines
-`__STRICT_ANSI__`, and glibc's headers then expose only ISO C. The `FLECS_HTTP` addon
-calls `getnameinfo` and uses `NI_NUMERICHOST`/`NI_NUMERICSERV` from `<netdb.h>`, all of
-which are POSIX rather than ISO C, so the build fails with an implicit-declaration error
-on glibc targets and nowhere else. musl, macOS and the Windows targets are unaffected.
+**A Linux libc hides POSIX declarations under `-std=c99`.** Strict-conformance mode
+defines `__STRICT_ANSI__`, and the libc's headers then expose only ISO C — glibc and musl
+alike. flecs asks for POSIX in two places. The POSIX OS API implementation calls
+`clock_gettime` and `nanosleep` and reads `CLOCK_MONOTONIC`; the `FLECS_HTTP` addon calls
+`getnameinfo` and uses `NI_NUMERICHOST`/`NI_NUMERICSERV` from `<netdb.h>`. Without a
+feature-test macro each of those is an implicit-declaration error on a Linux target and
+nowhere else.
 
-`build.zig` therefore adds `-D_POSIX_C_SOURCE=200112L` when the target is Linux *and*
-the HTTP addon is in the selected set. That is the minimum feature-test macro exposing
-`getnameinfo`, and it is applied from the computed addon set, so turning HTTP on later
-brings it along automatically.
+`build.zig` therefore adds `-D_POSIX_C_SOURCE=200112L` to every Linux target. That is a
+property of the target and the language mode, not of any addon: the OS API
+implementation is in every addon preset this package offers, `minimal` included, so
+conditioning the macro on the HTTP addon — which was the first call to run into it —
+left every HTTP-off Linux configuration unable to compile flecs.c. `200112L` is the
+minimum that exposes all of them.
+
+Not on Darwin, and the asymmetry is deliberate: Apple's headers expose POSIX under
+`__STRICT_ANSI__` on their own, and defining `_POSIX_C_SOURCE` there *narrows* what is
+visible rather than widening it.
 
 ## Upstream behaviour this package works around
 

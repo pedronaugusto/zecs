@@ -230,6 +230,11 @@ created outside this package entirely, through the raw C API. What it cannot cat
 that same case in a build with `-Ddisable_counters=true`; that is stated here rather than
 glossed.
 
+A world going away is not the end of flecs's memory either — the strings it hands back
+are freed through the same callback — so a swap is refused while flecs still holds a
+block. That count is kept in every build, not only in the ones where
+`-Dtrack_allocations` compiles the statistics in.
+
 Two smaller details. Blocks carry a 16-byte header, because flecs frees with a bare
 pointer and no size while Zig needs both, and 16 is the alignment C's `malloc` guarantees
 — flecs stores component data in these blocks, and a component holding a SIMD vector has
@@ -324,8 +329,8 @@ brings them back on top of an optimized build.
 **Allocator.** `-Duse_os_alloc` defaults to on in Debug and off in release; see below.
 
 **Diagnostics.** `-Dsanitize_c` runs Zig's C undefined-behaviour sanitizer over flecs
-(Debug only by default). `-Dtrack_allocations` makes the package count the bytes and
-blocks it has handed flecs, readable at runtime (Debug only by default).
+(Debug only by default). `-Dtrack_allocations` makes the bytes and the allocation count
+the package has handed flecs readable at runtime (Debug only by default).
 `-Ddebug_info` adds flecs's own annotations to its internal structures, which is what
 the natvis visualisers read. `-Dsoft_assert` reports a recoverable error instead of
 aborting.

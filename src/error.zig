@@ -22,7 +22,9 @@ pub const Error = error{
     OsApiLocked,
 
     /// An allocator swap was attempted while blocks from the previous one were still
-    /// outstanding. Only detectable when allocation tracking is enabled.
+    /// outstanding — a string flecs handed back and the host has not freed yet, most
+    /// likely. Detected in every build: the live-block count the check reads is not one
+    /// of the numbers `-Dtrack_allocations` governs.
     AllocationsOutstanding,
 
     /// `ecs_init` returned no world.

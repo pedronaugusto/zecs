@@ -153,7 +153,14 @@ pub const PipelineStats = struct {
     }
 
     /// Releases the vectors flecs allocated. Safe on a value that was never sampled.
+    ///
+    /// Needs the stats and pipeline addons, like `sample`: `ecs_pipeline_stats_fini` is
+    /// compiled into flecs only when both are defined, so a build without them has no
+    /// such symbol to link against.
     pub fn deinit(self: *PipelineStats) void {
+        if (comptime !(options.addon_stats and options.addon_pipeline)) @compileError(
+            "zecs.stats.PipelineStats needs the stats and pipeline addons",
+        );
         c.ecs_pipeline_stats_fini(&self.raw);
         self.raw = .{};
     }
@@ -205,7 +212,13 @@ pub const MetricKind = enum {
 
     /// The entity flecs assigned to this kind. Zero until the metrics module has been
     /// imported — see `zecs.pipeline.importBuiltin`.
+    ///
+    /// Needs the metrics addon: the four entities are linked symbols flecs only defines
+    /// with it, so `MetricDesc.toC` needs it too.
     pub inline fn id(self: MetricKind) Entity {
+        if (comptime !options.addon_metrics) @compileError(
+            "zecs.stats.MetricKind.id needs the metrics addon: build with -Daddon_metrics=true",
+        );
         return switch (self) {
             .gauge => c_metrics.EcsGauge,
             .counter => c_metrics.EcsCounter,
@@ -299,7 +312,13 @@ pub const Severity = enum {
 
     /// The entity flecs assigned to this severity. Zero until the alerts module has
     /// been imported — see `zecs.pipeline.importBuiltin`.
+    ///
+    /// Needs the alerts addon: the four entities are linked symbols flecs only defines
+    /// with it, so `AlertDesc.toC` needs it too.
     pub inline fn id(self: Severity) Entity {
+        if (comptime !options.addon_alerts) @compileError(
+            "zecs.stats.Severity.id needs the alerts addon: build with -Daddon_alerts=true",
+        );
         return switch (self) {
             .info => c_alerts.EcsAlertInfo,
             .warning => c_alerts.EcsAlertWarning,

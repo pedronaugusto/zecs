@@ -54,6 +54,10 @@ TODO_FILE=src/abi_todo.zig
 ABI_FILE=src/c/abi.zig
 COMPONENT_FILE=src/component.zig
 WORLD_FILE=src/world.zig
+STATS_FILE=src/stats.zig
+APP_FILE=src/app.zig
+SCRIPT_FILE=src/script.zig
+META_FILE=src/meta.zig
 
 # One backup of the whole of src/. The mutations reach past the declaration modules now
 # — a refusal in the typed layer is proved by planting the thing it refuses — and three
@@ -385,6 +389,173 @@ s = s.replace("""fn hasDeinit(comptime T: type) bool {""",
 
 fn hasDeinit(comptime T: type) bool {""", 1)
 ' 'zecs cannot derive a destructor'
+
+printf '\n%sAddon gates%s\n' "$BOLD" "$OFF"
+
+# Every entry point that touches a C symbol flecs compiles only with an addon refuses at
+# compile time in a build without that addon, and names it. Without the refusal the host
+# gets an undefined symbol from the linker with nothing in it pointing at the addon it
+# forgot — and since the refusals are `@compileError`, a gate that never fires and a gate
+# that is missing look identical from inside the language. So each case plants the call
+# the gate exists to refuse and requires the build to fail with the addon's name; a build
+# that fails with a link error instead is scored as a survivor, because that is exactly
+# what a missing gate produces.
+#
+# `minimal` is the addon set that leaves every one of these out. It is a different flecs
+# build from the one above, so the first case here pays for compiling it once.
+BUILD=(zig build test-compile -Daddons=minimal "$@")
+
+mutate 'gate: pipeline stats are released' "$STATS_FILE" '
+s = s.replace("""test "an empty vector reads as an empty slice" {""",
+              """test "planted: pipeline stats are released without the addons" {
+    var planted: PipelineStats = .{};
+    planted.deinit();
+}
+
+test "an empty vector reads as an empty slice" {""", 1)
+' 'needs the stats and pipeline addons'
+
+mutate 'gate: a metric kind entity is read' "$STATS_FILE" '
+s = s.replace("""test "an empty vector reads as an empty slice" {""",
+              """test "planted: a metric kind is read without the addon" {
+    _ = MetricKind.gauge.id();
+}
+
+test "an empty vector reads as an empty slice" {""", 1)
+' 'MetricKind.id needs the metrics addon'
+
+mutate 'gate: an alert severity entity is read' "$STATS_FILE" '
+s = s.replace("""test "an empty vector reads as an empty slice" {""",
+              """test "planted: an alert severity is read without the addon" {
+    _ = Severity.info.id();
+}
+
+test "an empty vector reads as an empty slice" {""", 1)
+' 'Severity.id needs the alerts addon'
+
+mutate 'gate: the REST component id is read' "$APP_FILE" '
+s = s.replace("""test "an app descriptor carries every field flecs reads" {""",
+              """test "planted: the REST component is read without the addon" {
+    _ = restComponent();
+}
+
+test "an app descriptor carries every field flecs reads" {""", 1)
+' 'restComponent needs the rest addon'
+
+mutate 'gate: a REST server is freed' "$APP_FILE" '
+s = s.replace("""test "an app descriptor carries every field flecs reads" {""",
+              """test "planted: a REST server is freed without the addon" {
+    _ = &RestServer.deinit;
+}
+
+test "an app descriptor carries every field flecs reads" {""", 1)
+' 'RestServer needs the rest addon'
+
+# Anchored above the doc comment rather than on the declaration: a test planted between
+# the two would fail on the orphaned doc comment instead of on the gate.
+mutate 'gate: a parsed script is freed' "$SCRIPT_FILE" '
+s = s.replace("""/// A parsed script, kept so it can be evaluated more than once.""",
+              """test "planted: a script is freed without the addon" {
+    _ = &Script.deinit;
+}
+
+/// A parsed script, kept so it can be evaluated more than once.""", 1)
+' 'no flecs script addon'
+
+mutate 'gate: a variable scope is freed' "$SCRIPT_FILE" '
+s = s.replace("""/// A parsed script, kept so it can be evaluated more than once.""",
+              """test "planted: a variable scope is freed without the addon" {
+    _ = &Vars.deinit;
+}
+
+/// A parsed script, kept so it can be evaluated more than once.""", 1)
+' 'no flecs script addon'
+
+mutate 'gate: a parsed expression is freed' "$SCRIPT_FILE" '
+s = s.replace("""/// A parsed script, kept so it can be evaluated more than once.""",
+              """test "planted: an expression is freed without the addon" {
+    _ = &Expr(u32).deinit;
+}
+
+/// A parsed script, kept so it can be evaluated more than once.""", 1)
+' 'no flecs script addon'
+
+mutate 'gate: a type id is asked for' "$META_FILE" '
+s = s.replace("""test "a struct'"'"'s members carry the offsets Zig computed" {""",
+              """test "planted: a type id is asked for without the addon" {
+    _ = typeId(undefined, u32) catch 0;
+}
+
+test "a struct'"'"'s members carry the offsets Zig computed" {""", 1)
+' 'meta addon, which this build left out'
+
+# The pipeline and the system addons are the two the `minimal` set is most often chosen
+# for dropping, and `World` is where a host meets them: seven entry points, each of which
+# is one flecs function that is not compiled at all without its addon.
+mutate 'gate: the pipeline is progressed' "$WORLD_FILE" '
+s = s.replace("""pub const World = struct {""",
+              """test "planted: progress without the pipeline addon" {
+    _ = &World.progress;
+}
+
+pub const World = struct {""", 1)
+' 'World.progress needs the pipeline addon'
+
+mutate 'gate: one system is run' "$WORLD_FILE" '
+s = s.replace("""pub const World = struct {""",
+              """test "planted: run without the system addon" {
+    _ = &World.run;
+}
+
+pub const World = struct {""", 1)
+' 'World.run needs the system addon'
+
+mutate 'gate: worker threads are asked for' "$WORLD_FILE" '
+s = s.replace("""pub const World = struct {""",
+              """test "planted: setThreads without the pipeline addon" {
+    _ = &World.setThreads;
+}
+
+pub const World = struct {""", 1)
+' 'World.setThreads needs the pipeline addon'
+
+mutate 'gate: task threads are asked for' "$WORLD_FILE" '
+s = s.replace("""pub const World = struct {""",
+              """test "planted: setTaskThreads without the pipeline addon" {
+    _ = &World.setTaskThreads;
+}
+
+pub const World = struct {""", 1)
+' 'World.setTaskThreads needs the pipeline addon'
+
+mutate 'gate: a frame is opened' "$WORLD_FILE" '
+s = s.replace("""pub const World = struct {""",
+              """test "planted: frame without the pipeline addon" {
+    _ = &World.frame;
+}
+
+pub const World = struct {""", 1)
+' 'World.frame needs the pipeline addon'
+
+mutate 'gate: a frame is ended' "$WORLD_FILE" '
+s = s.replace("""pub const World = struct {""",
+              """test "planted: Frame.end without the pipeline addon" {
+    _ = &World.Frame.end;
+}
+
+pub const World = struct {""", 1)
+' 'World.Frame needs the pipeline addon'
+
+mutate 'gate: a system is created' "$WORLD_FILE" '
+s = s.replace("""pub const World = struct {""",
+              """test "planted: system without the system addon" {
+    _ = &World.system;
+}
+
+pub const World = struct {""", 1)
+' 'World.system needs the system addon'
+
+BUILD=("${DEFAULT_BUILD[@]}")
 
 printf '\n%sThe API tiers%s\n' "$BOLD" "$OFF"
 
