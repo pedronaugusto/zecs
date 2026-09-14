@@ -17,6 +17,7 @@
         "build.zig.zon",
         "bench",
         "ci",
+        "docs",
         "examples",
         ".github",
         "libs",
